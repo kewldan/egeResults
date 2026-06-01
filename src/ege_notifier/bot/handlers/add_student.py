@@ -83,10 +83,19 @@ async def confirm_add(
     if not isinstance(callback.message, Message):
         return
 
+    # Снимок берём до check_student — он перезапишет student.results.
+    had_results = bool(student.results)
+
     if created:
         await callback.message.answer(
             texts.SUBSCRIBED.format(label=student.label), reply_markup=main_menu()
         )
+        # Ученик уже отслеживается кем-то и баллы в базе → diff будет пуст,
+        # поэтому показываем новому подписчику текущий снимок результатов.
+        if had_results:
+            await notifier.send(
+                callback.from_user.id, texts.format_current_results(student)
+            )
     else:
         await callback.message.answer(
             texts.ALREADY_SUBSCRIBED.format(label=student.label), reply_markup=main_menu()

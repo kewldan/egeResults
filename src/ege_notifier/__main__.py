@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 
 from ege_notifier.bot.factory import build_bot, build_dispatcher
@@ -17,6 +18,15 @@ from ege_notifier.services.subscriptions import SubscriptionService
 logger = logging.getLogger(__name__)
 
 
+def _log_task_exception(task: asyncio.Task) -> None:
+    """Логирует исключение фоновой задачи (иначе оно молча проглатывается)."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.error("Стартовая проверка завершилась с ошибкой", exc_info=exc)
+
+
 async def main() -> None:
     settings = Settings()
     setup_logging(settings.log_level)
@@ -27,7 +37,7 @@ async def main() -> None:
     provider = build_provider(settings)
     subscriptions = SubscriptionService(settings, cipher)
     bot = build_bot(settings.bot_token)
-    notifier = Notifier(bot)
+    notifier = Notifier(bot, settings.broadcast_delay)
     results = ResultsService(settings, provider, subscriptions)
 
     dp = build_dispatcher(subscriptions, results, notifier)
@@ -35,12 +45,19 @@ async def main() -> None:
     scheduler.start()
     logger.info("Запущено. Источник=%s", settings.provider)
 
+    # Держим ссылку на задачу: иначе её может собрать GC, а исключения — потеряться.
+    startup_task: asyncio.Task | None = None
     if settings.check_on_startup:
-        asyncio.create_task(run_check_cycle(results, notifier))
+        startup_task = asyncio.create_task(run_check_cycle(results, notifier))
+        startup_task.add_done_callback(_log_task_exception)
 
     try:
-        await dp.start_polling(bot)
+        await dp.start_polling(bot, drop_pending_updates=True)
     finally:
+        if startup_task is not None and not startup_task.done():
+            startup_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await startup_task
         scheduler.shutdown(wait=False)
         await bot.session.close()
         aclose = getattr(provider, "aclose", None)

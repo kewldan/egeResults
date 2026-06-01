@@ -4,6 +4,7 @@ import logging
 
 from beanie import PydanticObjectId
 from beanie.operators import In
+from pymongo.errors import DuplicateKeyError
 
 from ege_notifier.config import Settings
 from ege_notifier.models import Student, Subscription, User
@@ -30,9 +31,17 @@ class SubscriptionService:
     ) -> User:
         user = await User.find_one(User.telegram_id == telegram_id)
         if user is None:
-            user = User(telegram_id=telegram_id, username=username, full_name=full_name)
-            await user.insert()
-            return user
+            candidate = User(
+                telegram_id=telegram_id, username=username, full_name=full_name
+            )
+            try:
+                await candidate.insert()
+                return candidate
+            except DuplicateKeyError:
+                # Гонка (двойной /start) — запись уже создана параллельно; перечитываем.
+                user = await User.find_one(User.telegram_id == telegram_id)
+                if user is None:
+                    raise
 
         changed = False
         if user.username != username:
@@ -60,7 +69,14 @@ class SubscriptionService:
             identity_hash=ihash,
             passport_masked=mask_passport(passport_series, passport_number),
         )
-        await student.insert()
+        try:
+            await student.insert()
+        except DuplicateKeyError:
+            # Гонка: тот же паспорт вставлен параллельно (уникальный identity_hash).
+            existing = await Student.find_one(Student.identity_hash == ihash)
+            if existing is None:
+                raise
+            return existing
         logger.info("Создан ученик id=%s", student.id)
         return student
 
@@ -79,7 +95,11 @@ class SubscriptionService:
         )
         if existing is not None:
             return student, False
-        await Subscription(telegram_id=telegram_id, student_id=student.id).insert()
+        try:
+            await Subscription(telegram_id=telegram_id, student_id=student.id).insert()
+        except DuplicateKeyError:
+            # Гонка (двойное подтверждение) — подписка уже создана параллельно.
+            return student, False
         logger.info("Подписка: tg=%s -> ученик=%s", telegram_id, student.id)
         return student, True
 
@@ -114,6 +134,16 @@ class SubscriptionService:
     async def subscribers_for(self, student_id: PydanticObjectId) -> list[int]:
         subs = await Subscription.find(Subscription.student_id == student_id).to_list()
         return [s.telegram_id for s in subs]
+
+    async def subscribers_by_student(self) -> dict[PydanticObjectId, list[int]]:
+        """Все подписки одним запросом, сгруппированные по ученику.
+
+        Заменяет ``Student.find_all()`` + ``subscribers_for`` на каждого (N+1):
+        ученики без подписчиков сюда не попадают вовсе."""
+        grouped: dict[PydanticObjectId, list[int]] = {}
+        for sub in await Subscription.find_all().to_list():
+            grouped.setdefault(sub.student_id, []).append(sub.telegram_id)
+        return grouped
 
     def to_query(self, student: Student) -> StudentQuery:
         """Готовит запрос к источнику, расшифровывая паспортные данные."""

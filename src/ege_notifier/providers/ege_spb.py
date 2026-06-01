@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from urllib.parse import urlencode
 
 import httpx
@@ -23,8 +24,14 @@ _USER_AGENT = (
 
 
 def _normalize_subject(title: str) -> str:
-    """Стабильный ключ предмета для сопоставления между проверками."""
-    return " ".join(title.split()).lower()
+    """Стабильный ключ предмета для сопоставления между проверками.
+
+    Пунктуация отбрасывается, регистр и пробелы нормализуются, чтобы изменение
+    формулировки на сайте («Математика профильная» → «Математика (профильная)»)
+    не давало нового ключа и ложного дубль-уведомления.
+    """
+    cleaned = re.sub(r"[^\w\s]", " ", title)  # убираем скобки/точки/дефисы и т. п.
+    return " ".join(cleaned.split()).lower()
 
 
 def build_form_body(query: StudentQuery) -> str:

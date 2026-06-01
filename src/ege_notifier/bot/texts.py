@@ -81,6 +81,21 @@ def _display(value: str | None, score: int | None) -> str:
     return "—"
 
 
+def format_current_results(student: Student) -> str:
+    """Снимок всех известных результатов ученика — для нового подписчика, который
+    подписался на уже отслеживаемого ученика (diff будет пуст, но баллы есть)."""
+    lines = [
+        f"📊 Текущие результаты ЕГЭ: <b>{student.last_name}</b> ({student.passport_masked})",
+        "",
+    ]
+    for item in student.results:
+        title = item.subject_title or item.subject
+        value = _display(item.value, item.score)
+        status = f" · {item.status}" if item.status else ""
+        lines.append(f"• <b>{title}</b>: {value}{status}")
+    return "\n".join(lines)
+
+
 def format_results_update(student: Student, changes: list[ResultChange]) -> str:
     lines = [
         f"🔔 Обновление результатов ЕГЭ: <b>{student.last_name}</b> ({student.passport_masked})",

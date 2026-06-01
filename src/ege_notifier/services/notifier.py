@@ -19,8 +19,10 @@ logger = logging.getLogger(__name__)
 class Notifier:
     """Отправка уведомлений пользователям через Telegram с обработкой ошибок."""
 
-    def __init__(self, bot: Bot):
+    def __init__(self, bot: Bot, broadcast_delay: float = 0.05):
         self._bot = bot
+        # Пауза между сообщениями веерной рассылки (анти-rate-limit Telegram).
+        self._broadcast_delay = broadcast_delay
 
     async def send(self, telegram_id: int, text: str) -> bool:
         try:
@@ -41,7 +43,9 @@ class Notifier:
 
     async def broadcast(self, telegram_ids: Iterable[int], text: str) -> int:
         sent = 0
-        for tid in telegram_ids:
+        for i, tid in enumerate(telegram_ids):
+            if i and self._broadcast_delay > 0:
+                await asyncio.sleep(self._broadcast_delay)  # троттлинг под лимит Telegram
             if await self.send(tid, text):
                 sent += 1
         return sent

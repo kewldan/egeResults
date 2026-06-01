@@ -4,6 +4,9 @@ import asyncio
 import logging
 from dataclasses import dataclass
 
+from beanie import PydanticObjectId
+from beanie.operators import In
+
 from ege_notifier.config import Settings
 from ege_notifier.models import Student
 from ege_notifier.providers.base import ResultsProvider
@@ -33,12 +36,37 @@ class ResultsService:
         self._settings = settings
         self._provider = provider
         self._subs = subscriptions
+        # Блокировки по id ученика: ручная и плановая проверки не должны
+        # одновременно сохранять одного ученика (lost update / дубль-уведомление).
+        self._locks: dict[PydanticObjectId, asyncio.Lock] = {}
+
+    def _lock_for(self, student_id: PydanticObjectId) -> asyncio.Lock:
+        lock = self._locks.get(student_id)
+        if lock is None:
+            lock = self._locks[student_id] = asyncio.Lock()
+        return lock
 
     async def check_student(self, student: Student) -> list[ResultChange]:
         """Проверяет одного ученика, обновляет его результаты в БД и возвращает изменения.
 
         Поднимает ``NotImplementedError``, если выбранный источник ещё не настроен
         (например, ege.spb.ru до подключения реального запроса)."""
+        if student.id is None:
+            return await self._check_student_locked(student)
+        async with self._lock_for(student.id):
+            # Перечитываем актуальный снимок под блокировкой: если параллельная
+            # проверка уже сохранила результаты, diff не выдаст их повторно.
+            latest = await Student.get(student.id)
+            if latest is None:
+                # Ученик удалён (последняя отписка) — не воскрешаем его.
+                return []
+            student.results = latest.results
+            student.last_checked_at = latest.last_checked_at
+            student.last_changed_at = latest.last_changed_at
+            student.last_error = latest.last_error
+            return await self._check_student_locked(student)
+
+    async def _check_student_locked(self, student: Student) -> list[ResultChange]:
         query = self._subs.to_query(student)
         try:
             fetched = await self._provider.fetch(query)
@@ -63,10 +91,14 @@ class ResultsService:
     async def check_all(self) -> list[StudentUpdate]:
         """Проверяет всех учеников, у которых есть хотя бы один подписчик."""
         updates: list[StudentUpdate] = []
-        students = await Student.find_all().to_list()
-        logger.info("Плановая проверка: учеников в базе=%d", len(students))
+        subscribers_by_id = await self._subs.subscribers_by_student()
+        if not subscribers_by_id:
+            return updates
+        # Берём только учеников с подписчиками (без find_all + N+1 на подписки).
+        students = await Student.find(In(Student.id, list(subscribers_by_id))).to_list()
+        logger.info("Плановая проверка: учеников с подписчиками=%d", len(students))
         for student in students:
-            subscribers = await self._subs.subscribers_for(student.id)
+            subscribers = subscribers_by_id.get(student.id, [])
             if not subscribers:
                 continue  # некому слать — пропускаем (и не дёргаем источник)
             changes = await self.check_student(student)
