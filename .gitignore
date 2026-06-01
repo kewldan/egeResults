@@ -1,0 +1,17 @@
+# Виртуальное окружение
+.venv/
+
+# Секреты
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+build/
+dist/
+
+# IDE
+.idea/
+.vscode/
