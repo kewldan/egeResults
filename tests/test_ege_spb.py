@@ -3,7 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from ege_notifier.providers.base import StudentQuery
-from ege_notifier.providers.ege_spb import build_form_body, parse_results_html
+from ege_notifier.providers.ege_spb import (
+    _normalize_subject,
+    build_form_body,
+    parse_results_html,
+)
 
 SAMPLE = (Path(__file__).parent / "fixtures" / "ege_spb_sample.html").read_text(
     encoding="utf-8"
@@ -33,6 +37,14 @@ def test_parse_sample_response():
     assert r.score is None  # «Зачёт» — не число
     assert r.status == "Действующий результат"
     assert r.exam_date == "3 декабря 2025"
+
+
+def test_normalize_subject_merges_punctuation_variants():
+    # Изменение формулировки на сайте не должно давать новый ключ (дубль-уведомление).
+    assert _normalize_subject("Математика (профильная)") == _normalize_subject(
+        "Математика профильная"
+    )
+    assert _normalize_subject("Русский язык") == "русский язык"
 
 
 def test_parse_empty_or_unknown():
