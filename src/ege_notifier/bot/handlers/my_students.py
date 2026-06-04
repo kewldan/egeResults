@@ -80,6 +80,15 @@ async def check_now(
         return
 
     if changes:
-        await callback.message.answer(texts.format_results_update(student, changes))
+        text = texts.format_results_update(student, changes)
+        await callback.message.answer(text)  # инициатору — сразу, в текущий чат
+        # check_student уже записал снимок в БД → плановая проверка эти изменения
+        # больше не увидит; уведомляем остальных подписчиков, иначе они пропустят.
+        others = [
+            tid
+            for tid in await subscriptions.subscribers_for(student.id)
+            if tid != callback.from_user.id
+        ]
+        await notifier.broadcast(others, text)
     else:
         await callback.message.answer(texts.NO_CHANGES.format(label=student.label))

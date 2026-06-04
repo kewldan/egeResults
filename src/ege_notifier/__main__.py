@@ -34,6 +34,12 @@ async def main() -> None:
     client = await init_db(settings.mongo_uri, settings.mongo_db)
 
     cipher = Cipher(settings.encryption_key)
+    if settings.identity_secret == "change-me-please":
+        logger.warning(
+            "IDENTITY_SECRET не задан — используется значение по умолчанию. "
+            "Установите свой секрет до накопления данных: менять его потом нельзя "
+            "(сломается дедупликация учеников по identity_hash)."
+        )
     provider = build_provider(settings)
     subscriptions = SubscriptionService(settings, cipher)
     bot = build_bot(settings.bot_token)
