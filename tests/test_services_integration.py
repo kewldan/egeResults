@@ -172,6 +172,34 @@ async def test_check_student_reports_new_then_no_change():
         await client.close()
 
 
+async def test_check_student_does_not_resurrect_deleted_student():
+    """Если ученика удалили (последняя отписка) во время fetch, save не должен
+    его воскресить — проверка молча завершается без уведомления."""
+    fetched = [FetchedResult(subject="русский язык", score=88, value="88")]
+    client = await _fresh_db()
+    try:
+        subs, _ = _services()
+        student, _ = await subs.subscribe(1, "Иванов", "4022", "083074")
+
+        async def fetch_then_delete(_query):
+            # Имитируем параллельную отписку: ученик удаляется во время запроса
+            # к источнику (после reread в check_student, но до записи).
+            doc = await Student.get(student.id)
+            await doc.delete()
+            return list(fetched)
+
+        provider = SimpleNamespace(fetch=fetch_then_delete)
+        results = ResultsService(
+            SimpleNamespace(request_delay=0), provider, subs
+        )
+        changes = await results.check_student(student)
+        assert changes == []  # удалённого ученика не уведомляем
+        assert await Student.get(student.id) is None  # и НЕ воскрешаем
+    finally:
+        await client.drop_database(TEST_DB)
+        await client.close()
+
+
 async def test_check_all_skips_students_without_subscribers():
     fetched = [FetchedResult(subject="русский язык", score=88, value="88")]
     client = await _fresh_db()

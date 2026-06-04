@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import weakref
 from dataclasses import dataclass
 
 from beanie import PydanticObjectId
+from beanie.exceptions import DocumentNotFound
 from beanie.operators import In
 
 from ege_notifier.config import Settings
@@ -38,9 +40,15 @@ class ResultsService:
         self._subs = subscriptions
         # Блокировки по id ученика: ручная и плановая проверки не должны
         # одновременно сохранять одного ученика (lost update / дубль-уведомление).
-        self._locks: dict[PydanticObjectId, asyncio.Lock] = {}
+        # WeakValueDictionary — чтобы запись жила, только пока блокировку кто-то
+        # держит/вот-вот возьмёт, и не копилась навсегда по каждому ученику.
+        self._locks: weakref.WeakValueDictionary[PydanticObjectId, asyncio.Lock] = (
+            weakref.WeakValueDictionary()
+        )
 
     def _lock_for(self, student_id: PydanticObjectId) -> asyncio.Lock:
+        # Без await между get и присваиванием — конкурентные корутины получают
+        # один и тот же объект блокировки (event loop однопоточный).
         lock = self._locks.get(student_id)
         if lock is None:
             lock = self._locks[student_id] = asyncio.Lock()
@@ -66,6 +74,22 @@ class ResultsService:
             student.last_error = latest.last_error
             return await self._check_student_locked(student)
 
+    async def _persist(self, student: Student) -> bool:
+        """Сохраняет ученика, НЕ воскрешая удалённую запись.
+
+        Если последний подписчик отписался во время медленного fetch, ученик уже
+        удалён — ``save()`` (upsert) воскресил бы его вместе с PII. ``replace()``
+        не делает upsert и бросает ``DocumentNotFound`` — тогда просто молчим."""
+        if student.id is None:
+            await student.insert()
+            return True
+        try:
+            await student.replace()
+            return True
+        except DocumentNotFound:
+            logger.info("Ученик id=%s удалён во время проверки — не воскрешаем", student.id)
+            return False
+
     async def _check_student_locked(self, student: Student) -> list[ResultChange]:
         query = self._subs.to_query(student)
         try:
@@ -75,7 +99,7 @@ class ResultsService:
         except Exception as exc:  # сетевые/парсинговые ошибки не должны валить цикл
             student.last_error = str(exc)
             student.last_checked_at = utcnow()
-            await student.save()
+            await self._persist(student)
             logger.warning("Ошибка проверки ученика id=%s: %s", student.id, exc)
             return []
 
@@ -85,7 +109,8 @@ class ResultsService:
         student.last_error = None
         if changes:
             student.last_changed_at = utcnow()
-        await student.save()
+        if not await self._persist(student):
+            return []  # ученика удалили во время проверки — не уведомляем
         return changes
 
     async def check_all(self) -> list[StudentUpdate]:

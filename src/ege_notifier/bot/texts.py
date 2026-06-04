@@ -84,10 +84,11 @@ def _display(value: str | None, score: int | None) -> str:
 def format_current_results(student: Student) -> str:
     """Снимок всех известных результатов ученика — для нового подписчика, который
     подписался на уже отслеживаемого ученика (diff будет пуст, но баллы есть)."""
-    lines = [
-        f"📊 Текущие результаты ЕГЭ: <b>{student.last_name}</b> ({student.passport_masked})",
-        "",
-    ]
+    header = f"📊 Текущие результаты ЕГЭ: <b>{student.last_name}</b> ({student.passport_masked})"
+    if not student.results:
+        # Защита от заголовка без строк, если вызвать с пустым снимком.
+        return f"{header}\n\nРезультатов пока нет."
+    lines = [header, ""]
     for item in student.results:
         title = item.subject_title or item.subject
         value = _display(item.value, item.score)

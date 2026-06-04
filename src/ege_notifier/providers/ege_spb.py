@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import logging
-import re
 from urllib.parse import urlencode
 
 import httpx
 from bs4 import BeautifulSoup
 
 from ege_notifier.providers.base import FetchedResult, StudentQuery
+from ege_notifier.utils import normalize_subject
 
 logger = logging.getLogger(__name__)
 
@@ -21,17 +21,6 @@ _USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 )
-
-
-def _normalize_subject(title: str) -> str:
-    """Стабильный ключ предмета для сопоставления между проверками.
-
-    Пунктуация отбрасывается, регистр и пробелы нормализуются, чтобы изменение
-    формулировки на сайте («Математика профильная» → «Математика (профильная)»)
-    не давало нового ключа и ложного дубль-уведомления.
-    """
-    cleaned = re.sub(r"[^\w\s]", " ", title)  # убираем скобки/точки/дефисы и т. п.
-    return " ".join(cleaned.split()).lower()
 
 
 def build_form_body(query: StudentQuery) -> str:
@@ -85,7 +74,7 @@ def parse_results_html(html: str) -> list[FetchedResult]:
 
         results.append(
             FetchedResult(
-                subject=_normalize_subject(subject_title),
+                subject=normalize_subject(subject_title),
                 subject_title=subject_title,
                 score=score,
                 value=value,

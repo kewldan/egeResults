@@ -55,3 +55,23 @@ def test_merge_keeps_unseen_subjects():
     merged = merge_results(existing, fetched)
     subjects = {m.subject for m in merged}
     assert subjects == {"russian", "math"}
+
+
+def test_diff_matches_old_key_after_normalization_change():
+    # Предмет сохранён под старым ключом (со скобками), сайт прислал тот же
+    # балл — это НЕ новый результат, ключи сопоставляются нормализованно.
+    existing = [ResultItem(subject="математика (профильная)", score=88, status="готов")]
+    fetched = [FetchedResult(subject="математика профильная", score=88, status="готов")]
+    assert diff_results(existing, fetched) == []
+
+
+def test_merge_migrates_old_key_without_duplicating():
+    # При смене ключа предмет не дублируется, а лениво переезжает на канонический.
+    existing = [ResultItem(subject="математика (профильная)", score=88)]
+    first_seen = existing[0].first_seen_at
+    fetched = [FetchedResult(subject="математика профильная", score=90)]
+    merged = merge_results(existing, fetched)
+    assert len(merged) == 1
+    assert merged[0].subject == "математика профильная"  # канонический ключ
+    assert merged[0].score == 90
+    assert merged[0].first_seen_at == first_seen  # история сохранена

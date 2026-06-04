@@ -5,7 +5,7 @@ from enum import Enum
 
 from ege_notifier.models.student import ResultItem
 from ege_notifier.providers.base import FetchedResult
-from ege_notifier.utils import utcnow
+from ege_notifier.utils import normalize_subject, utcnow
 
 
 class ChangeType(str, Enum):
@@ -37,11 +37,15 @@ def diff_results(
     existing: list[ResultItem], fetched: list[FetchedResult]
 ) -> list[ResultChange]:
     """Чистая функция: сравнивает известные результаты с полученными от источника
-    и возвращает список изменений (новые предметы и обновлённые значения/статусы)."""
-    by_subject = {item.subject: item for item in existing}
+    и возвращает список изменений (новые предметы и обновлённые значения/статусы).
+
+    Сопоставление идёт по нормализованному ключу предмета (на обеих сторонах),
+    поэтому смена формулировки на сайте или изменение правил нормализации не
+    рвут связь со старым снимком (без ложных «новых результатов»)."""
+    by_subject = {normalize_subject(item.subject): item for item in existing}
     changes: list[ResultChange] = []
     for f in fetched:
-        old = by_subject.get(f.subject)
+        old = by_subject.get(normalize_subject(f.subject))
         if old is None:
             changes.append(
                 ResultChange(
@@ -78,19 +82,24 @@ def merge_results(
 ) -> list[ResultItem]:
     """Возвращает новый список результатов: обновляет существующие предметы,
     добавляет новые и сохраняет ранее известные, которых нет в текущем ответе.
-    ``first_seen_at`` сохраняется, ``updated_at`` обновляется при изменении."""
-    by_subject = {item.subject: item for item in existing}
+    ``first_seen_at`` сохраняется, ``updated_at`` обновляется при изменении.
+
+    Сопоставление и ключ хранения — нормализованные (см. ``diff_results``):
+    предметы, сохранённые под старым ключом, лениво переезжают на канонический,
+    поэтому смена правил нормализации не плодит дубли."""
+    by_subject = {normalize_subject(item.subject): item for item in existing}
     now = utcnow()
     merged: list[ResultItem] = []
     seen: set[str] = set()
 
     for f in fetched:
-        seen.add(f.subject)
-        old = by_subject.get(f.subject)
+        key = normalize_subject(f.subject)
+        seen.add(key)
+        old = by_subject.get(key)
         if old is None:
             merged.append(
                 ResultItem(
-                    subject=f.subject,
+                    subject=key,
                     subject_title=f.subject_title,
                     score=f.score,
                     value=f.value,
@@ -105,7 +114,7 @@ def merge_results(
             changed = _is_changed(old, f)
             merged.append(
                 ResultItem(
-                    subject=old.subject,
+                    subject=key,
                     subject_title=f.subject_title or old.subject_title,
                     score=f.score if f.score is not None else old.score,
                     value=f.value if f.value is not None else old.value,
@@ -119,6 +128,6 @@ def merge_results(
 
     # Сохраняем ранее известные предметы, которых не было в этом ответе.
     for item in existing:
-        if item.subject not in seen:
+        if normalize_subject(item.subject) not in seen:
             merged.append(item)
     return merged

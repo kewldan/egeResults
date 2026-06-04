@@ -108,6 +108,10 @@ async def confirm_add(
         await callback.message.answer(texts.PROVIDER_NOT_READY)
         return
     if changes:
-        await notifier.send(
-            callback.from_user.id, texts.format_results_update(student, changes)
+        # check_student уже записал свежий снимок в БД, поэтому плановая проверка
+        # этих изменений больше не увидит — рассылаем их всем подписчикам ученика
+        # сразу, иначе остальные подписчики останутся без уведомления.
+        subscriber_ids = await subscriptions.subscribers_for(student.id)
+        await notifier.broadcast(
+            subscriber_ids, texts.format_results_update(student, changes)
         )

@@ -39,6 +39,12 @@ def test_format_current_results_lists_all_known_results():
     assert "Сочинение" in text and "Зачёт" in text
 
 
+def test_format_current_results_empty_is_not_header_only():
+    text = texts.format_current_results(_student([]))
+    assert "Результатов пока нет" in text
+    assert not text.endswith("\n")  # не «голый» заголовок с пустой строкой
+
+
 def test_format_results_update_new_and_updated():
     changes = [
         ResultChange(
