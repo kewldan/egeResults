@@ -35,3 +35,22 @@ def test_mask_passport_shows_tail():
     masked = mask_passport("4003", "123456")
     assert masked.endswith("56")
     assert "123456" not in masked
+
+
+def test_decrypt_with_wrong_key_warns_and_passes_through(caplog):
+    # Токен, зашифрованный одним ключом, нельзя расшифровать другим (смена ключа).
+    token = Cipher(Cipher.generate_key()).encrypt("123456")
+    other = Cipher(Cipher.generate_key())
+    with caplog.at_level("WARNING"):
+        result = other.decrypt(token)
+    assert result == token  # отдаём как есть, не падаем
+    assert "ENCRYPTION_KEY" in caplog.text  # но предупреждаем
+    assert "123456" not in caplog.text  # и не светим PII
+
+
+def test_decrypt_legacy_plaintext_is_silent(caplog):
+    # Значение из «до шифрования» (не похоже на Fernet-токен) — без предупреждения.
+    cipher = Cipher(Cipher.generate_key())
+    with caplog.at_level("WARNING"):
+        assert cipher.decrypt("123456") == "123456"
+    assert caplog.text == ""

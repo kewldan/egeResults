@@ -56,7 +56,14 @@ class Cipher:
         try:
             return self._fernet.decrypt(value.encode()).decode()
         except InvalidToken:
-            # Значение, по-видимому, сохранено в открытом виде (до включения шифрования).
+            # Все Fernet-токены начинаются с "gAAAAA". Если значение похоже на токен,
+            # но не расшифровалось — почти наверняка сменили ENCRYPTION_KEY (это
+            # запрещено: расшифровка PII ломается). Предупреждаем, не логируя само PII.
+            if value.startswith("gAAAAA"):
+                logger.warning(
+                    "Не удалось расшифровать PII-поле — вероятно, изменён ENCRYPTION_KEY."
+                )
+            # Иначе значение сохранено в открытом виде (до включения шифрования).
             return value
 
     @staticmethod
