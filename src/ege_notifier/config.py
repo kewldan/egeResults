@@ -16,6 +16,7 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        populate_by_name=True,
     )
 
     # --- Telegram ---
@@ -33,7 +34,10 @@ class Settings(BaseSettings):
     # --- Источник результатов ---
     # mock    — читает результаты из JSON-файла (для разработки/тестов);
     # ege_spb — реальный фетчер ege.spb.ru (POST формы проверки результатов).
-    provider: Literal["mock", "ege_spb"] = "mock"
+    # env-имя — RESULTS_PROVIDER (не PROVIDER): задаётся через validation_alias.
+    provider: Literal["mock", "ege_spb"] = Field(
+        "mock", validation_alias="results_provider"
+    )
     mock_fixtures_path: str = "fixtures/results.json"
     ege_spb_base_url: str = "https://www.ege.spb.ru"
     # Параметры URL ege.spb.ru: ?mode=...&wave=... (экзаменационная кампания и волна).
