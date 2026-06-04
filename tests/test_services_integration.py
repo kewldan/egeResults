@@ -21,7 +21,7 @@ from beanie import init_beanie
 from pymongo import AsyncMongoClient
 
 from ege_notifier.models import ALL_DOCUMENTS, Student, Subscription
-from ege_notifier.providers.base import FetchedResult
+from ege_notifier.providers.base import FetchedResult, StudentNotFoundError
 from ege_notifier.security import Cipher
 from ege_notifier.services.results import ResultsService
 from ege_notifier.services.subscriptions import SubscriptionService
@@ -195,6 +195,59 @@ async def test_check_student_does_not_resurrect_deleted_student():
         changes = await results.check_student(student)
         assert changes == []  # удалённого ученика не уведомляем
         assert await Student.get(student.id) is None  # и НЕ воскрешаем
+    finally:
+        await client.drop_database(TEST_DB)
+        await client.close()
+
+
+async def test_check_student_not_found_sets_flag_and_reraises():
+    """StudentNotFoundError помечает ученика not_found, сохраняет это и пробрасывается."""
+    client = await _fresh_db()
+    try:
+        subs = SubscriptionService(
+            SimpleNamespace(identity_secret="test-secret", request_delay=0), Cipher(None)
+        )
+
+        async def fetch_not_found(_query):
+            raise StudentNotFoundError("опечатка")
+
+        results = ResultsService(
+            SimpleNamespace(request_delay=0), SimpleNamespace(fetch=fetch_not_found), subs
+        )
+        student, _ = await subs.subscribe(1, "Иванов", "4022", "083074")
+
+        with pytest.raises(StudentNotFoundError):
+            await results.check_student(student)
+
+        reloaded = await Student.get(student.id)
+        assert reloaded.not_found is True
+        assert reloaded.last_checked_at is not None
+        assert reloaded.results == []
+    finally:
+        await client.drop_database(TEST_DB)
+        await client.close()
+
+
+async def test_check_all_survives_not_found_student():
+    """Один «не найден» не должен ронять весь цикл; флаг сохраняется."""
+    client = await _fresh_db()
+    try:
+        subs = SubscriptionService(
+            SimpleNamespace(identity_secret="test-secret", request_delay=0), Cipher(None)
+        )
+
+        async def fetch_not_found(_query):
+            raise StudentNotFoundError("опечатка")
+
+        results = ResultsService(
+            SimpleNamespace(request_delay=0), SimpleNamespace(fetch=fetch_not_found), subs
+        )
+        student, _ = await subs.subscribe(1, "Иванов", "4022", "083074")
+
+        updates = await results.check_all()  # не должно бросить
+        assert updates == []
+        reloaded = await Student.get(student.id)
+        assert reloaded.not_found is True
     finally:
         await client.drop_database(TEST_DB)
         await client.close()

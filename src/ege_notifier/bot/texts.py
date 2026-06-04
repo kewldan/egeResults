@@ -44,6 +44,14 @@ PROVIDER_NOT_READY = (
 NO_CHANGES = "🔁 Новых результатов пока нет: <b>{label}</b>."
 UNSUBSCRIBED = "🗑 Удалено из отслеживаемых: <b>{label}</b>."
 
+STUDENT_NOT_FOUND = (
+    "🔎 На <b>ege.spb.ru</b> не нашлось ученика по этим данным: <b>{label}</b>.\n\n"
+    "Чаще всего это опечатка в фамилии, серии или номере паспорта. Фамилия должна "
+    "быть точно как в паспорте. Удалите ученика (🗑) и добавьте заново с верными "
+    "данными.\n\nЕсли данные точно верны — возможно, ученика ещё нет в базе сайта; "
+    "я продолжу проверять автоматически."
+)
+
 
 def confirm_text(data: dict) -> str:
     return (
@@ -55,10 +63,14 @@ def confirm_text(data: dict) -> str:
 
 
 def _student_status(student: Student) -> str:
-    if student.last_error:
-        return "ошибка проверки"
     if student.results:
         return f"известно результатов: {len(student.results)}"
+    # «Не найден» показываем только когда баллов ещё нет: иначе разовый сбой сайта
+    # не должен прятать уже известные результаты.
+    if getattr(student, "not_found", False):
+        return "не найден — проверьте данные"
+    if student.last_error:
+        return "ошибка проверки"
     if student.last_checked_at:
         return "результатов пока нет"
     return "ещё не проверялся"

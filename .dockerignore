@@ -1,0 +1,20 @@
+# Окружение и кеши — собираются внутри образа
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+build/
+dist/
+
+# Секреты и локальное
+.env
+.git/
+.github/
+.idea/
+.vscode/
+
+# Тесты и документация в рантайме не нужны
+tests/
+*.md
+CODE_REVIEW.md

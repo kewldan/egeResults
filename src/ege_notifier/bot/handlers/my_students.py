@@ -7,6 +7,7 @@ from beanie import PydanticObjectId
 from ege_notifier.bot import texts
 from ege_notifier.bot.keyboards import main_menu, students_keyboard
 from ege_notifier.models import Student
+from ege_notifier.providers.base import StudentNotFoundError
 from ege_notifier.services.notifier import Notifier
 from ege_notifier.services.results import ResultsService
 from ege_notifier.services.subscriptions import SubscriptionService
@@ -77,6 +78,9 @@ async def check_now(
         changes = await results.check_student(student)
     except NotImplementedError:
         await callback.message.answer(texts.PROVIDER_NOT_READY)
+        return
+    except StudentNotFoundError:
+        await callback.message.answer(texts.STUDENT_NOT_FOUND.format(label=student.label))
         return
 
     if changes:

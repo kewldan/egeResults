@@ -4,6 +4,7 @@ from ege_notifier.config import Settings
 from ege_notifier.providers.base import (
     FetchedResult,
     ResultsProvider,
+    StudentNotFoundError,
     StudentQuery,
 )
 from ege_notifier.providers.ege_spb import EgeSpbProvider
@@ -27,6 +28,7 @@ __all__ = [
     "ResultsProvider",
     "StudentQuery",
     "FetchedResult",
+    "StudentNotFoundError",
     "MockResultsProvider",
     "EgeSpbProvider",
     "build_provider",

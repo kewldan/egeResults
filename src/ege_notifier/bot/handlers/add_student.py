@@ -12,6 +12,7 @@ from ege_notifier.bot.validators import (
     validate_number,
     validate_series,
 )
+from ege_notifier.providers.base import StudentNotFoundError
 from ege_notifier.services.notifier import Notifier
 from ege_notifier.services.results import ResultsService
 from ege_notifier.services.subscriptions import SubscriptionService
@@ -106,6 +107,12 @@ async def confirm_add(
         changes = await results.check_student(student)
     except NotImplementedError:
         await callback.message.answer(texts.PROVIDER_NOT_READY)
+        return
+    except StudentNotFoundError:
+        # Источник не нашёл ученика — почти всегда опечатка в данных.
+        await callback.message.answer(
+            texts.STUDENT_NOT_FOUND.format(label=student.label)
+        )
         return
     if changes:
         # check_student уже записал свежий снимок в БД, поэтому плановая проверка

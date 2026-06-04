@@ -4,7 +4,11 @@ import json
 import logging
 from pathlib import Path
 
-from ege_notifier.providers.base import FetchedResult, StudentQuery
+from ege_notifier.providers.base import (
+    FetchedResult,
+    StudentNotFoundError,
+    StudentQuery,
+)
 from ege_notifier.security import normalize_digits
 
 logger = logging.getLogger(__name__)
@@ -24,6 +28,11 @@ class MockResultsProvider:
 
     Меняя файл во время работы бота, можно сымитировать появление новых
     результатов и проверить весь конвейер уведомлений без реального сайта.
+
+    Семантика трёх состояний (как у реального источника):
+      - ключа нет в файле        → ученик «не найден» (``StudentNotFoundError``);
+      - ключ есть, список пуст    → ученик найден, результатов пока нет (``[]``);
+      - ключ есть, список не пуст → результаты ученика.
     """
 
     def __init__(self, fixtures_path: str | Path):
@@ -35,7 +44,9 @@ class MockResultsProvider:
             return []
         data = json.loads(self._path.read_text(encoding="utf-8"))
         key = normalize_digits(query.passport_number)
-        entries = data.get(key, [])
+        if key not in data:
+            raise StudentNotFoundError(f"mock: паспорт {key} не найден в фикстурах")
+        entries = data[key]
         return [
             FetchedResult(
                 subject=entry["subject"],

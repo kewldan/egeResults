@@ -25,9 +25,14 @@ class Settings(BaseSettings):
     mongo_uri: str = "mongodb://localhost:27017"
     mongo_db: str = "ege_notifier"
 
+    # --- Хранилище FSM бота ---
+    # Если задан REDIS_URL — состояние «добавления ученика» переживает рестарт бота.
+    # Иначе используется MemoryStorage (теряется при перезапуске; ок для разработки).
+    redis_url: str | None = None
+
     # --- Источник результатов ---
     # mock    — читает результаты из JSON-файла (для разработки/тестов);
-    # ege_spb — реальный фетчер ege.spb.ru (парсинг будет дописан под реальный запрос).
+    # ege_spb — реальный фетчер ege.spb.ru (POST формы проверки результатов).
     provider: Literal["mock", "ege_spb"] = "mock"
     mock_fixtures_path: str = "fixtures/results.json"
     ege_spb_base_url: str = "https://www.ege.spb.ru"

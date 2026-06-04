@@ -16,6 +16,7 @@ from types import SimpleNamespace
 from beanie import PydanticObjectId
 
 from ege_notifier.bot.handlers import add_student, my_students
+from ege_notifier.providers.base import StudentNotFoundError
 from ege_notifier.services.diff import ChangeType, ResultChange
 
 
@@ -91,6 +92,13 @@ class FakeResults:
         return self._changes
 
 
+class FakeResultsNotFound:
+    """check_student бросает StudentNotFoundError — как при опечатке в данных."""
+
+    async def check_student(self, student):
+        raise StudentNotFoundError("not found")
+
+
 def _student(results=None):
     sid = PydanticObjectId()
     return SimpleNamespace(
@@ -145,6 +153,23 @@ async def test_confirm_add_sends_snapshot_to_new_subscriber(monkeypatch):
     assert notifier.broadcasts == []
 
 
+async def test_confirm_add_warns_when_student_not_found(monkeypatch):
+    monkeypatch.setattr(add_student, "Message", FakeMessage)
+    student = _student(results=[])
+    subs = FakeSubscriptions(student, created=True, subscribers=[7])
+    notifier = FakeNotifier()
+    message = FakeMessage()
+    callback = FakeCallback(message, user_id=7)
+    state = FakeState({"last_name": "Иванов", "passport_series": "4022", "passport_number": "083074"})
+
+    await add_student.confirm_add(callback, state, subs, FakeResultsNotFound(), notifier)
+
+    # Пользователю подсказали проверить данные; рассылок/снимков нет.
+    assert any("не нашлось" in a for a in message.answers)
+    assert notifier.broadcasts == []
+    assert notifier.sent == []
+
+
 async def test_confirm_add_broadcasts_new_results_to_all_subscribers(monkeypatch):
     monkeypatch.setattr(add_student, "Message", FakeMessage)
     student = _student(results=[])
@@ -190,6 +215,21 @@ async def test_check_now_notifies_other_subscribers_and_replies_inline(monkeypat
     assert len(notifier.broadcasts) == 1
     ids, _ = notifier.broadcasts[0]
     assert ids == [2, 3]
+
+
+async def test_check_now_warns_when_student_not_found(monkeypatch):
+    monkeypatch.setattr(my_students, "Message", FakeMessage)
+    student = _student()
+    _patch_student_get(monkeypatch, student)
+    subs = FakeSubscriptions(student, created=False, subscribers=[1, 2, 3])
+    notifier = FakeNotifier()
+    message = FakeMessage()
+    callback = FakeCallback(message, user_id=1, data=f"check:{student.id}")
+
+    await my_students.check_now(callback, subs, FakeResultsNotFound(), notifier)
+
+    assert any("не нашлось" in a for a in message.answers)
+    assert notifier.broadcasts == []
 
 
 async def test_check_now_no_changes_does_not_broadcast(monkeypatch):

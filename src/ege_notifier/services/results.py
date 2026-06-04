@@ -11,7 +11,7 @@ from beanie.operators import In
 
 from ege_notifier.config import Settings
 from ege_notifier.models import Student
-from ege_notifier.providers.base import ResultsProvider
+from ege_notifier.providers.base import ResultsProvider, StudentNotFoundError
 from ege_notifier.services.diff import ResultChange, diff_results, merge_results
 from ege_notifier.services.subscriptions import SubscriptionService
 from ege_notifier.utils import utcnow
@@ -72,6 +72,7 @@ class ResultsService:
             student.last_checked_at = latest.last_checked_at
             student.last_changed_at = latest.last_changed_at
             student.last_error = latest.last_error
+            student.not_found = latest.not_found
             return await self._check_student_locked(student)
 
     async def _persist(self, student: Student) -> bool:
@@ -96,6 +97,17 @@ class ResultsService:
             fetched = await self._provider.fetch(query)
         except NotImplementedError:
             raise
+        except StudentNotFoundError:
+            # Источник не нашёл ученика (вероятна опечатка в фамилии/паспорте).
+            # Помечаем флагом и пробрасываем выше — хендлер подскажет проверить
+            # данные. Результаты НЕ трогаем: если ученик раньше находился, разовый
+            # «не найден» (сбой сайта) не должен стирать уже известные баллы.
+            student.not_found = True
+            student.last_error = None
+            student.last_checked_at = utcnow()
+            await self._persist(student)
+            logger.info("Ученик id=%s не найден источником (опечатка?)", student.id)
+            raise
         except Exception as exc:  # сетевые/парсинговые ошибки не должны валить цикл
             student.last_error = str(exc)
             student.last_checked_at = utcnow()
@@ -107,6 +119,7 @@ class ResultsService:
         student.results = merge_results(student.results, fetched)
         student.last_checked_at = utcnow()
         student.last_error = None
+        student.not_found = False
         if changes:
             student.last_changed_at = utcnow()
         if not await self._persist(student):
@@ -126,7 +139,11 @@ class ResultsService:
             subscribers = subscribers_by_id.get(student.id, [])
             if not subscribers:
                 continue  # некому слать — пропускаем (и не дёргаем источник)
-            changes = await self.check_student(student)
+            try:
+                changes = await self.check_student(student)
+            except StudentNotFoundError:
+                # Флаг «не найден» уже сохранён; не уведомляем и не валим цикл.
+                changes = []
             if changes:
                 updates.append(
                     StudentUpdate(student=student, changes=changes, subscribers=subscribers)

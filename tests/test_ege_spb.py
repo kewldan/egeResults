@@ -5,6 +5,7 @@ from pathlib import Path
 from ege_notifier.providers.base import StudentQuery
 from ege_notifier.providers.ege_spb import (
     build_form_body,
+    looks_not_found,
     parse_results_html,
 )
 from ege_notifier.utils import normalize_subject
@@ -49,6 +50,49 @@ def test_normalize_subject_merges_punctuation_variants():
 
 def test_parse_empty_or_unknown():
     assert parse_results_html("<html><body>ничего</body></html>") == []
+
+
+# --- «не найден» vs «результатов пока нет» ---------------------------------
+
+# Форма поиска, которую сайт отдаёт при неверных данных (нет блока ученика).
+SEARCH_FORM = """
+<html><body>
+  <form method="post" action="index.php">
+    <input type="text" name="pLastName" value="">
+    <input type="text" name="Series" value="">
+    <input type="text" name="Number" value="">
+    <input type="submit" name="Login" value="Показать результаты">
+  </form>
+</body></html>
+"""
+
+# Ученик найден, но баллов ещё нет: есть регистрация на экзамены, блока
+# результатов нет.
+FOUND_NO_RESULTS = """
+<html><body>
+  <div id="exam-content">
+    <div id="reg-data">
+      <table class="registrations-info-table"><tr><td>Русский язык</td></tr></table>
+    </div>
+  </div>
+</body></html>
+"""
+
+
+def test_looks_not_found_on_search_form():
+    # Сайт вернул форму поиска (опечатка/неверные данные) → «не найден».
+    assert looks_not_found(SEARCH_FORM) is True
+
+
+def test_looks_not_found_false_on_results_page():
+    # Страница с результатами — ученик найден.
+    assert looks_not_found(SAMPLE) is False
+
+
+def test_looks_not_found_false_when_found_but_no_results():
+    # Найден, но результатов ещё нет — это НЕ «не найден» (есть регистрация).
+    assert looks_not_found(FOUND_NO_RESULTS) is False
+    assert parse_results_html(FOUND_NO_RESULTS) == []
 
 
 def test_parse_numeric_score():

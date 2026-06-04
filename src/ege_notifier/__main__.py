@@ -4,7 +4,7 @@ import asyncio
 import contextlib
 import logging
 
-from ege_notifier.bot.factory import build_bot, build_dispatcher
+from ege_notifier.bot.factory import build_bot, build_dispatcher, build_storage
 from ege_notifier.config import Settings
 from ege_notifier.db import init_db
 from ege_notifier.logging_setup import setup_logging
@@ -46,10 +46,15 @@ async def main() -> None:
     notifier = Notifier(bot, settings.broadcast_delay)
     results = ResultsService(settings, provider, subscriptions)
 
-    dp = build_dispatcher(subscriptions, results, notifier)
+    storage = build_storage(settings.redis_url)
+    dp = build_dispatcher(subscriptions, results, notifier, storage)
     scheduler = build_scheduler(settings, results, notifier)
     scheduler.start()
-    logger.info("Запущено. Источник=%s", settings.provider)
+    logger.info(
+        "Запущено. Источник=%s, FSM=%s",
+        settings.provider,
+        "redis" if settings.redis_url else "memory",
+    )
 
     # Держим ссылку на задачу: иначе её может собрать GC, а исключения — потеряться.
     startup_task: asyncio.Task | None = None
@@ -65,6 +70,7 @@ async def main() -> None:
             with contextlib.suppress(asyncio.CancelledError):
                 await startup_task
         scheduler.shutdown(wait=False)
+        await dp.storage.close()  # закрывает пул Redis (для MemoryStorage — no-op)
         await bot.session.close()
         aclose = getattr(provider, "aclose", None)
         if aclose is not None:

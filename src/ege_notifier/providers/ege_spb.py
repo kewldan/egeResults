@@ -6,7 +6,11 @@ from urllib.parse import urlencode
 import httpx
 from bs4 import BeautifulSoup
 
-from ege_notifier.providers.base import FetchedResult, StudentQuery
+from ege_notifier.providers.base import (
+    FetchedResult,
+    StudentNotFoundError,
+    StudentQuery,
+)
 from ege_notifier.utils import normalize_subject
 
 logger = logging.getLogger(__name__)
@@ -34,6 +38,28 @@ def build_form_body(query: StudentQuery) -> str:
         },
         encoding=ENCODING,
     )
+
+
+def looks_not_found(html: str) -> bool:
+    """True, если сайт вернул форму поиска вместо страницы ученика (опечатка/неверные данные).
+
+    Найденному ученику ege.spb.ru показывает блок результатов/регистрации
+    (``#exam-content`` / ``#result-data`` / ``#reg-data``) — даже когда баллов ещё
+    нет (есть регистрация на экзамены). Если же фамилия+паспорт не совпали, сайт
+    повторно отдаёт форму поиска с полем ``pLastName``. Так мы отличаем «не нашли
+    ученика» от «ученик есть, результатов пока нет».
+
+    Чтобы случайно не принять временную ошибку/непонятную страницу за «не найден»,
+    требуем оба признака: есть форма поиска И нет контента ученика. Иначе считаем
+    ответ обычной страницей (пустой список → «результатов пока нет»)."""
+    soup = BeautifulSoup(html, "html.parser")
+    has_content = bool(
+        soup.select_one("#exam-content")
+        or soup.select_one("#result-data")
+        or soup.select_one("#reg-data")
+    )
+    has_search_form = soup.find("input", attrs={"name": "pLastName"}) is not None
+    return has_search_form and not has_content
 
 
 def parse_results_html(html: str) -> list[FetchedResult]:
@@ -120,6 +146,10 @@ class EgeSpbProvider:
         )
         response.raise_for_status()
         html = response.content.decode(ENCODING, errors="replace")
+        if looks_not_found(html):
+            raise StudentNotFoundError(
+                "ege.spb.ru вернул форму поиска — ученик не найден по фамилии и паспорту"
+            )
         return parse_results_html(html)
 
     async def aclose(self) -> None:

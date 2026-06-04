@@ -38,6 +38,9 @@ class Student(Document):
     last_checked_at: datetime | None = None
     last_changed_at: datetime | None = None
     last_error: str | None = None
+    # Источник не нашёл ученика по фамилии+паспорту (вероятна опечатка), в отличие
+    # от «найден, но результатов ещё нет». Сбрасывается, как только проверка прошла.
+    not_found: bool = False
 
     created_at: datetime = Field(default_factory=utcnow)
 
