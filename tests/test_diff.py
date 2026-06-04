@@ -6,7 +6,9 @@ from ege_notifier.services.diff import ChangeType, diff_results, merge_results
 
 
 def test_new_result_detected():
-    changes = diff_results([], [FetchedResult(subject="russian", score=88, status="готов")])
+    changes = diff_results(
+        [], [FetchedResult(subject="russian", score=88, status="готов")]
+    )
     assert len(changes) == 1
     assert changes[0].type == ChangeType.NEW
     assert changes[0].new_score == 88

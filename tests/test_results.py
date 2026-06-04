@@ -10,7 +10,8 @@ from ege_notifier.services.results import ResultsService
 
 def _service() -> ResultsService:
     # Конструктор ничего не делает с БД — достаточно заглушек.
-    return ResultsService(SimpleNamespace(), SimpleNamespace(), SimpleNamespace())
+    stub = SimpleNamespace()
+    return ResultsService(stub, stub, stub)  # ty: ignore[invalid-argument-type]
 
 
 def test_lock_for_returns_same_lock_for_same_id():

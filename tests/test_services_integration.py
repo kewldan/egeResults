@@ -14,17 +14,34 @@ from __future__ import annotations
 import asyncio
 import os
 from types import SimpleNamespace
+from typing import cast
 
 import pymongo
 import pytest
 from beanie import init_beanie
 from pymongo import AsyncMongoClient
 
+from ege_notifier.config import Settings
 from ege_notifier.models import ALL_DOCUMENTS, Student, Subscription
-from ege_notifier.providers.base import FetchedResult, StudentNotFoundError
+from ege_notifier.providers.base import (
+    FetchedResult,
+    ResultsProvider,
+    StudentNotFoundError,
+)
 from ege_notifier.security import Cipher
 from ege_notifier.services.results import ResultsService
 from ege_notifier.services.subscriptions import SubscriptionService
+
+
+def _settings(**kwargs: object) -> Settings:
+    """Заглушка настроек: сервисам нужны лишь пара полей, а не весь Settings."""
+    return cast(Settings, SimpleNamespace(**kwargs))
+
+
+def _provider(fetch) -> ResultsProvider:
+    """Заглушка источника: достаточно одного метода ``fetch``."""
+    return cast(ResultsProvider, SimpleNamespace(fetch=fetch))
+
 
 MONGO_URI = os.environ.get("MONGO_URI", "mongodb://localhost:27017")
 TEST_DB = "ege_notifier_test"
@@ -54,9 +71,9 @@ async def _fresh_db() -> AsyncMongoClient:
 
 
 def _services(fetched: list[FetchedResult] | None = None):
-    settings = SimpleNamespace(identity_secret="test-secret", request_delay=0)
+    settings = _settings(identity_secret="test-secret", request_delay=0)
     subs = SubscriptionService(settings, Cipher(None))
-    provider = SimpleNamespace(fetch=_make_fetch(fetched or []))
+    provider = _provider(_make_fetch(fetched or []))
     results = ResultsService(settings, provider, subs)
     return subs, results
 
@@ -109,7 +126,9 @@ async def test_subscribe_twice_is_idempotent():
         _, created2 = await subs.subscribe(1, "Иванов", "4022", "083074")
         assert created1 is True
         assert created2 is False
-        assert await Subscription.find(Subscription.student_id == student.id).count() == 1
+        assert (
+            await Subscription.find(Subscription.student_id == student.id).count() == 1
+        )
     finally:
         await client.drop_database(TEST_DB)
         await client.close()
@@ -164,6 +183,7 @@ async def test_check_student_reports_new_then_no_change():
         changes = await results.check_student(student)
         assert len(changes) == 1
         reloaded = await Student.get(student.id)
+        assert reloaded is not None
         assert len(reloaded.results) == 1 and reloaded.results[0].score == 88
         # Повторная проверка тем же ответом — изменений нет.
         assert await results.check_student(student) == []
@@ -185,13 +205,12 @@ async def test_check_student_does_not_resurrect_deleted_student():
             # Имитируем параллельную отписку: ученик удаляется во время запроса
             # к источнику (после reread в check_student, но до записи).
             doc = await Student.get(student.id)
+            assert doc is not None
             await doc.delete()
             return list(fetched)
 
-        provider = SimpleNamespace(fetch=fetch_then_delete)
-        results = ResultsService(
-            SimpleNamespace(request_delay=0), provider, subs
-        )
+        provider = _provider(fetch_then_delete)
+        results = ResultsService(_settings(request_delay=0), provider, subs)
         changes = await results.check_student(student)
         assert changes == []  # удалённого ученика не уведомляем
         assert await Student.get(student.id) is None  # и НЕ воскрешаем
@@ -205,14 +224,17 @@ async def test_check_student_not_found_sets_flag_and_reraises():
     client = await _fresh_db()
     try:
         subs = SubscriptionService(
-            SimpleNamespace(identity_secret="test-secret", request_delay=0), Cipher(None)
+            _settings(identity_secret="test-secret", request_delay=0),
+            Cipher(None),
         )
 
         async def fetch_not_found(_query):
             raise StudentNotFoundError("опечатка")
 
         results = ResultsService(
-            SimpleNamespace(request_delay=0), SimpleNamespace(fetch=fetch_not_found), subs
+            _settings(request_delay=0),
+            _provider(fetch_not_found),
+            subs,
         )
         student, _ = await subs.subscribe(1, "Иванов", "4022", "083074")
 
@@ -220,6 +242,7 @@ async def test_check_student_not_found_sets_flag_and_reraises():
             await results.check_student(student)
 
         reloaded = await Student.get(student.id)
+        assert reloaded is not None
         assert reloaded.not_found is True
         assert reloaded.last_checked_at is not None
         assert reloaded.results == []
@@ -233,20 +256,24 @@ async def test_check_all_survives_not_found_student():
     client = await _fresh_db()
     try:
         subs = SubscriptionService(
-            SimpleNamespace(identity_secret="test-secret", request_delay=0), Cipher(None)
+            _settings(identity_secret="test-secret", request_delay=0),
+            Cipher(None),
         )
 
         async def fetch_not_found(_query):
             raise StudentNotFoundError("опечатка")
 
         results = ResultsService(
-            SimpleNamespace(request_delay=0), SimpleNamespace(fetch=fetch_not_found), subs
+            _settings(request_delay=0),
+            _provider(fetch_not_found),
+            subs,
         )
         student, _ = await subs.subscribe(1, "Иванов", "4022", "083074")
 
         updates = await results.check_all()  # не должно бросить
         assert updates == []
         reloaded = await Student.get(student.id)
+        assert reloaded is not None
         assert reloaded.not_found is True
     finally:
         await client.drop_database(TEST_DB)

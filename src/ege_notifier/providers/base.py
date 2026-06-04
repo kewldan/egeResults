@@ -40,5 +40,4 @@ class FetchedResult:
 class ResultsProvider(Protocol):
     """Источник результатов ЕГЭ. Реализации: MockResultsProvider, EgeSpbProvider."""
 
-    async def fetch(self, query: StudentQuery) -> list[FetchedResult]:
-        ...
+    async def fetch(self, query: StudentQuery) -> list[FetchedResult]: ...

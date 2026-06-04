@@ -17,7 +17,9 @@ def _write(tmp_path, data: dict) -> str:
 
 
 def _query(number: str = "654321") -> StudentQuery:
-    return StudentQuery(last_name="Иванов", passport_series="4022", passport_number=number)
+    return StudentQuery(
+        last_name="Иванов", passport_series="4022", passport_number=number
+    )
 
 
 async def test_absent_passport_raises_not_found(tmp_path):

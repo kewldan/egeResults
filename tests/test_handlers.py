@@ -143,7 +143,9 @@ async def test_confirm_add_sends_snapshot_to_new_subscriber(monkeypatch):
     subs = FakeSubscriptions(student, created=True, subscribers=[2, 7])
     notifier = FakeNotifier()
     callback = FakeCallback(FakeMessage(), user_id=7)
-    state = FakeState({"last_name": "Иванов", "passport_series": "4022", "passport_number": "083074"})
+    state = FakeState(
+        {"last_name": "Иванов", "passport_series": "4022", "passport_number": "083074"}
+    )
 
     await add_student.confirm_add(callback, state, subs, FakeResults([]), notifier)
 
@@ -160,9 +162,13 @@ async def test_confirm_add_warns_when_student_not_found(monkeypatch):
     notifier = FakeNotifier()
     message = FakeMessage()
     callback = FakeCallback(message, user_id=7)
-    state = FakeState({"last_name": "Иванов", "passport_series": "4022", "passport_number": "083074"})
+    state = FakeState(
+        {"last_name": "Иванов", "passport_series": "4022", "passport_number": "083074"}
+    )
 
-    await add_student.confirm_add(callback, state, subs, FakeResultsNotFound(), notifier)
+    await add_student.confirm_add(
+        callback, state, subs, FakeResultsNotFound(), notifier
+    )
 
     # Пользователю подсказали проверить данные; рассылок/снимков нет.
     assert any("не нашлось" in a for a in message.answers)
@@ -176,9 +182,13 @@ async def test_confirm_add_broadcasts_new_results_to_all_subscribers(monkeypatch
     subs = FakeSubscriptions(student, created=True, subscribers=[2, 7])
     notifier = FakeNotifier()
     callback = FakeCallback(FakeMessage(), user_id=7)
-    state = FakeState({"last_name": "Иванов", "passport_series": "4022", "passport_number": "083074"})
+    state = FakeState(
+        {"last_name": "Иванов", "passport_series": "4022", "passport_number": "083074"}
+    )
 
-    await add_student.confirm_add(callback, state, subs, FakeResults([_new_change()]), notifier)
+    await add_student.confirm_add(
+        callback, state, subs, FakeResults([_new_change()]), notifier
+    )
 
     # Найденные при проверке изменения уходят ВСЕМ подписчикам, а не только инициатору.
     assert len(notifier.broadcasts) == 1

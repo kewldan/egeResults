@@ -88,7 +88,9 @@ class ResultsService:
             await student.replace()
             return True
         except DocumentNotFound:
-            logger.info("Ученик id=%s удалён во время проверки — не воскрешаем", student.id)
+            logger.info(
+                "Ученик id=%s удалён во время проверки — не воскрешаем", student.id
+            )
             return False
 
     async def _check_student_locked(self, student: Student) -> list[ResultChange]:
@@ -146,7 +148,9 @@ class ResultsService:
                 changes = []
             if changes:
                 updates.append(
-                    StudentUpdate(student=student, changes=changes, subscribers=subscribers)
+                    StudentUpdate(
+                        student=student, changes=changes, subscribers=subscribers
+                    )
                 )
             if self._settings.request_delay > 0:
                 await asyncio.sleep(self._settings.request_delay)

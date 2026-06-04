@@ -9,11 +9,15 @@ def test_normalize_digits():
 
 
 def test_identity_hash_normalizes_spaces():
-    assert identity_hash("40 03", "123 456", "s") == identity_hash("4003", "123456", "s")
+    assert identity_hash("40 03", "123 456", "s") == identity_hash(
+        "4003", "123456", "s"
+    )
 
 
 def test_identity_hash_depends_on_secret():
-    assert identity_hash("4003", "123456", "s1") != identity_hash("4003", "123456", "s2")
+    assert identity_hash("4003", "123456", "s1") != identity_hash(
+        "4003", "123456", "s2"
+    )
 
 
 def test_cipher_roundtrip():

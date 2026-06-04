@@ -45,7 +45,9 @@ class Notifier:
         sent = 0
         for i, tid in enumerate(telegram_ids):
             if i and self._broadcast_delay > 0:
-                await asyncio.sleep(self._broadcast_delay)  # троттлинг под лимит Telegram
+                await asyncio.sleep(
+                    self._broadcast_delay
+                )  # троттлинг под лимит Telegram
             if await self.send(tid, text):
                 sent += 1
         return sent
@@ -55,4 +57,6 @@ class Notifier:
         if user is not None and user.is_active:
             user.is_active = False
             await user.save()
-            logger.info("Пользователь %s заблокировал бота — помечен неактивным", telegram_id)
+            logger.info(
+                "Пользователь %s заблокировал бота — помечен неактивным", telegram_id
+            )

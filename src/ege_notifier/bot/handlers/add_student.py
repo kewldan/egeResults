@@ -99,7 +99,8 @@ async def confirm_add(
             )
     else:
         await callback.message.answer(
-            texts.ALREADY_SUBSCRIBED.format(label=student.label), reply_markup=main_menu()
+            texts.ALREADY_SUBSCRIBED.format(label=student.label),
+            reply_markup=main_menu(),
         )
 
     # Сразу проверим текущие результаты (если источник уже настроен).
@@ -118,6 +119,7 @@ async def confirm_add(
         # check_student уже записал свежий снимок в БД, поэтому плановая проверка
         # этих изменений больше не увидит — рассылаем их всем подписчикам ученика
         # сразу, иначе остальные подписчики останутся без уведомления.
+        assert student.id is not None  # подписанный ученик уже сохранён в БД
         subscriber_ids = await subscriptions.subscribers_for(student.id)
         await notifier.broadcast(
             subscriber_ids, texts.format_results_update(student, changes)

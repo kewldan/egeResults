@@ -18,7 +18,9 @@ SAMPLE = (Path(__file__).parent / "fixtures" / "ege_spb_sample.html").read_text(
 def test_build_form_body_uses_cp1251():
     # Должно совпадать с реальным телом запроса ege.spb.ru (поля в windows-1251).
     body = build_form_body(
-        StudentQuery(last_name="Тенишев", passport_series="4022", passport_number="083074")
+        StudentQuery(
+            last_name="Тенишев", passport_series="4022", passport_number="083074"
+        )
     )
     assert body == (
         "pLastName=%D2%E5%ED%E8%F8%E5%E2"

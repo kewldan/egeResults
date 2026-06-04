@@ -57,7 +57,9 @@ class SubscriptionService:
     async def get_or_create_student(
         self, last_name: str, passport_series: str, passport_number: str
     ) -> Student:
-        ihash = identity_hash(passport_series, passport_number, self._settings.identity_secret)
+        ihash = identity_hash(
+            passport_series, passport_number, self._settings.identity_secret
+        )
         student = await Student.find_one(Student.identity_hash == ihash)
         if student is not None:
             return student
@@ -88,7 +90,9 @@ class SubscriptionService:
         passport_number: str,
     ) -> tuple[Student, bool]:
         """Подписывает пользователя на ученика. Возвращает (ученик, создана_ли_подписка)."""
-        student = await self.get_or_create_student(last_name, passport_series, passport_number)
+        student = await self.get_or_create_student(
+            last_name, passport_series, passport_number
+        )
         existing = await Subscription.find_one(
             Subscription.telegram_id == telegram_id,
             Subscription.student_id == student.id,
@@ -104,7 +108,9 @@ class SubscriptionService:
         return student, True
 
     async def list_subscriptions(self, telegram_id: int) -> list[Student]:
-        subs = await Subscription.find(Subscription.telegram_id == telegram_id).to_list()
+        subs = await Subscription.find(
+            Subscription.telegram_id == telegram_id
+        ).to_list()
         if not subs:
             return []
         ids = [s.student_id for s in subs]
@@ -123,7 +129,9 @@ class SubscriptionService:
         await sub.delete()
 
         # Если на ученика больше никто не подписан — удаляем его вместе с PII.
-        remaining = await Subscription.find(Subscription.student_id == student_id).count()
+        remaining = await Subscription.find(
+            Subscription.student_id == student_id
+        ).count()
         if remaining == 0:
             student = await Student.get(student_id)
             if student is not None:

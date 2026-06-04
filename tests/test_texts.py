@@ -1,15 +1,20 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import cast
 
 from ege_notifier.bot import texts
+from ege_notifier.models import Student
 from ege_notifier.services.diff import ChangeType, ResultChange
 
 
-def _student(results: list) -> SimpleNamespace:
+def _student(results: list) -> Student:
     # texts.* обращаются только к этим полям ученика — duck-typing избавляет от БД.
-    return SimpleNamespace(
-        last_name="Иванов", passport_masked="●●●● ●●●●74", results=results
+    return cast(
+        Student,
+        SimpleNamespace(
+            last_name="Иванов", passport_masked="●●●● ●●●●74", results=results
+        ),
     )
 
 

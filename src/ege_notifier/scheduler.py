@@ -19,7 +19,9 @@ async def run_check_cycle(results: ResultsService, notifier: Notifier) -> None:
     try:
         updates = await results.check_all()
     except NotImplementedError:
-        logger.warning("Источник ege.spb.ru ещё не настроен — плановая проверка пропущена")
+        logger.warning(
+            "Источник ege.spb.ru ещё не настроен — плановая проверка пропущена"
+        )
         return
 
     for upd in updates:
@@ -34,7 +36,9 @@ def build_scheduler(
 ) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(timezone=settings.timezone)
     if settings.check_cron:
-        trigger = CronTrigger.from_crontab(settings.check_cron, timezone=settings.timezone)
+        trigger = CronTrigger.from_crontab(
+            settings.check_cron, timezone=settings.timezone
+        )
         logger.info("Расписание проверок: cron='%s'", settings.check_cron)
     else:
         trigger = IntervalTrigger(seconds=settings.check_interval_seconds)

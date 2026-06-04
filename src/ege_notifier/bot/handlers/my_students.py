@@ -22,7 +22,9 @@ def _parse_id(data: str) -> PydanticObjectId | None:
         return None
 
 
-async def _show_list(message: Message, subscriptions: SubscriptionService, telegram_id: int) -> None:
+async def _show_list(
+    message: Message, subscriptions: SubscriptionService, telegram_id: int
+) -> None:
     students = await subscriptions.list_subscriptions(telegram_id)
     if not students:
         await message.answer(texts.NO_STUDENTS, reply_markup=main_menu())
@@ -33,14 +35,18 @@ async def _show_list(message: Message, subscriptions: SubscriptionService, teleg
 
 
 @router.callback_query(F.data == "my_students")
-async def list_students(callback: CallbackQuery, subscriptions: SubscriptionService) -> None:
+async def list_students(
+    callback: CallbackQuery, subscriptions: SubscriptionService
+) -> None:
     if isinstance(callback.message, Message):
         await _show_list(callback.message, subscriptions, callback.from_user.id)
     await callback.answer()
 
 
 @router.callback_query(F.data.startswith("del:"))
-async def delete_student(callback: CallbackQuery, subscriptions: SubscriptionService) -> None:
+async def delete_student(
+    callback: CallbackQuery, subscriptions: SubscriptionService
+) -> None:
     student_id = _parse_id(callback.data or "")
     if student_id is None:
         await callback.answer("Некорректный идентификатор", show_alert=True)
@@ -80,7 +86,9 @@ async def check_now(
         await callback.message.answer(texts.PROVIDER_NOT_READY)
         return
     except StudentNotFoundError:
-        await callback.message.answer(texts.STUDENT_NOT_FOUND.format(label=student.label))
+        await callback.message.answer(
+            texts.STUDENT_NOT_FOUND.format(label=student.label)
+        )
         return
 
     if changes:
@@ -88,6 +96,7 @@ async def check_now(
         await callback.message.answer(text)  # инициатору — сразу, в текущий чат
         # check_student уже записал снимок в БД → плановая проверка эти изменения
         # больше не увидит; уведомляем остальных подписчиков, иначе они пропустят.
+        assert student.id is not None  # student получен через Student.get выше
         others = [
             tid
             for tid in await subscriptions.subscribers_for(student.id)
