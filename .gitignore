@@ -4,6 +4,9 @@
 # Секреты
 .env
 
+# Данные Docker (bind mount mongo/redis)
+data/
+
 # Python
 __pycache__/
 *.py[cod]
