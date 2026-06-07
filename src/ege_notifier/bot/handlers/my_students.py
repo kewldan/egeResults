@@ -8,7 +8,6 @@ from beanie import PydanticObjectId
 from ege_notifier.bot import texts
 from ege_notifier.bot.keyboards import (
     back_to_list_keyboard,
-    main_menu,
     results_card_keyboard,
     results_link_keyboard,
     student_card_keyboard,
@@ -36,11 +35,8 @@ async def _show_list(
     message: Message, subscriptions: SubscriptionService, telegram_id: int
 ) -> None:
     students = await subscriptions.list_subscriptions(telegram_id)
-    if not students:
-        await edit_message(message, texts.NO_STUDENTS, main_menu())
-        return
     await edit_message(
-        message, texts.students_overview(students), students_keyboard(students)
+        message, texts.students_list_text(students), students_keyboard(students)
     )
 
 

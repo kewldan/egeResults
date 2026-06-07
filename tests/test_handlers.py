@@ -15,7 +15,7 @@ from types import SimpleNamespace
 
 from beanie import PydanticObjectId
 
-from ege_notifier.bot.handlers import add_student, my_students
+from ege_notifier.bot.handlers import add_student, common, my_students
 from ege_notifier.providers.base import StudentNotFoundError
 from ege_notifier.services.diff import ChangeType, ResultChange
 from ege_notifier.services.results import RefreshThrottled
@@ -25,15 +25,23 @@ from ege_notifier.services.results import RefreshThrottled
 
 
 class FakeMessage:
-    def __init__(self):
+    def __init__(self, user_id=None):
         self.answers: list[str] = []
         self.edits: list[str] = []
+        self.markups: list = []  # клавиатуры последних answer/edit
+        self.from_user = (
+            SimpleNamespace(id=user_id, username=None, full_name=None)
+            if user_id is not None
+            else None
+        )
 
     async def answer(self, text, reply_markup=None):
         self.answers.append(text)
+        self.markups.append(reply_markup)
 
     async def edit_text(self, text, reply_markup=None):
         self.edits.append(text)
+        self.markups.append(reply_markup)
 
 
 class FakeCallback:
@@ -92,17 +100,23 @@ SETTINGS = SimpleNamespace(
 
 
 class FakeSubscriptions:
-    def __init__(self, student, created, subscribers, share_token="tok123"):
+    def __init__(
+        self, student, created, subscribers, share_token="tok123", students=None
+    ):
         self._student = student
         self._created = created
         self._subscribers = subscribers
         self._share_token = share_token
+        self._students = students or []
 
     async def subscribe(self, telegram_id, last_name, series, number):
         return self._student, self._created
 
     async def subscribers_for(self, student_id):
         return list(self._subscribers)
+
+    async def list_subscriptions(self, telegram_id):
+        return list(self._students)
 
     async def create_share_token(self, student_id, telegram_id):
         # Подписчик получает токен; не-подписчик — None (как в реальном сервисе).
@@ -141,6 +155,9 @@ def _student(results=None):
         last_name="Иванов",
         passport_masked="●●●● ●●●●74",
         results=results or [],
+        last_error=None,
+        last_checked_at=None,
+        not_found=False,
     )
 
 
@@ -401,3 +418,48 @@ async def test_share_student_rejects_non_subscriber(monkeypatch):
     # Не подписан → ссылку не выдаём.
     assert message.answers == [] and message.edits == []
     assert callback.answered == ["Ученик не найден"]
+
+
+# --- нижняя ReplyKeyboard (common) -------------------------------------------
+
+
+def _kb_labels(markup) -> list[str]:
+    return [b.text for row in markup.inline_keyboard for b in row]
+
+
+async def test_btn_my_students_lists_students_with_add_button():
+    student = _student()
+    subs = FakeSubscriptions(
+        student, created=False, subscribers=[1], students=[student]
+    )
+    message = FakeMessage(user_id=1)
+    state = FakeState({})
+
+    await common.btn_my_students(message, state, subs)
+
+    # Одно сообщение со списком; в клавиатуре — ученик и кнопка добавления.
+    assert any("Иванов" in a for a in message.answers)
+    labels = _kb_labels(message.markups[-1])
+    assert any("Иванов" in t for t in labels)
+    assert any("Добавить ученика" in t for t in labels)
+
+
+async def test_btn_my_students_empty_shows_only_add_button():
+    subs = FakeSubscriptions(_student(), created=False, subscribers=[], students=[])
+    message = FakeMessage(user_id=1)
+    state = FakeState({})
+
+    await common.btn_my_students(message, state, subs)
+
+    labels = _kb_labels(message.markups[-1])
+    assert labels == ["➕ Добавить ученика"]
+
+
+async def test_btn_security_and_about_send_texts():
+    sec = FakeMessage(user_id=1)
+    await common.btn_security(sec)
+    assert any("Безопасность" in a for a in sec.answers)
+
+    about = FakeMessage(user_id=1)
+    await common.btn_about(about)
+    assert any("@kewldan" in a for a in about.answers)

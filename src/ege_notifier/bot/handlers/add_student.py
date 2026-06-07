@@ -6,8 +6,8 @@ from aiogram.types import CallbackQuery, Message
 
 from ege_notifier.bot import texts
 from ege_notifier.bot.keyboards import (
+    back_to_list_keyboard,
     confirm_keyboard,
-    main_menu,
     results_link_keyboard,
 )
 from ege_notifier.bot.states import AddStudent
@@ -100,7 +100,7 @@ async def confirm_add(
         await edit_message(
             callback.message,
             texts.SUBSCRIBED.format(label=student.label),
-            main_menu(),
+            back_to_list_keyboard(),
         )
         # Ученик уже отслеживается кем-то и баллы в базе → diff будет пуст,
         # поэтому показываем новому подписчику текущий снимок результатов.
@@ -112,7 +112,7 @@ async def confirm_add(
         await edit_message(
             callback.message,
             texts.ALREADY_SUBSCRIBED.format(label=student.label),
-            main_menu(),
+            back_to_list_keyboard(),
         )
 
     # Сразу проверим текущие результаты.

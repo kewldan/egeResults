@@ -7,9 +7,10 @@ from aiogram.types import CallbackQuery, Message
 
 from ege_notifier.bot import texts
 from ege_notifier.bot.keyboards import (
-    main_menu,
+    back_to_list_keyboard,
     main_reply_keyboard,
     results_link_keyboard,
+    students_keyboard,
 )
 from ege_notifier.bot.ui import edit_message
 from ege_notifier.config import Settings
@@ -33,17 +34,6 @@ async def _register_user(
     )
     if created:
         await notifier.notify_admin(texts.admin_new_user(registered))
-
-
-async def _show_home(
-    message: Message, subscriptions: SubscriptionService, notifier: Notifier
-) -> None:
-    """Главный экран: приветствие + постоянная нижняя клавиатура и инлайн-действия."""
-    await _register_user(message, subscriptions, notifier)
-    # Постоянную нижнюю клавиатуру можно задать только при отправке сообщения,
-    # поэтому приветствие несёт её, а инлайн-действия идут отдельным сообщением.
-    await message.answer(texts.WELCOME, reply_markup=main_reply_keyboard())
-    await message.answer(texts.CHOOSE_ACTION, reply_markup=main_menu())
 
 
 # Deep-link /start <token> — приглашение по одноразовой ссылке. Регистрируем ВЫШЕ
@@ -102,19 +92,26 @@ async def cmd_start(
     notifier: Notifier,
 ) -> None:
     await state.clear()
-    await _show_home(message, subscriptions, notifier)
+    await _register_user(message, subscriptions, notifier)
+    # Одно приветственное сообщение + постоянная нижняя клавиатура.
+    await message.answer(texts.WELCOME, reply_markup=main_reply_keyboard())
 
 
-# Нижняя кнопка «Мои ученики» — алиас /start (показывает главный экран).
+# Нижняя кнопка «Мои ученики» — список учеников одним сообщением: кнопка на
+# каждого ученика + «➕ Добавить ученика». Живёт в common (router включён первым),
+# чтобы кнопка срабатывала и во время FSM добавления.
 @router.message(F.text == texts.BTN_MY_STUDENTS)
 async def btn_my_students(
-    message: Message,
-    state: FSMContext,
-    subscriptions: SubscriptionService,
-    notifier: Notifier,
+    message: Message, state: FSMContext, subscriptions: SubscriptionService
 ) -> None:
     await state.clear()
-    await _show_home(message, subscriptions, notifier)
+    user = message.from_user
+    if user is None:
+        return
+    students = await subscriptions.list_subscriptions(user.id)
+    await message.answer(
+        texts.students_list_text(students), reply_markup=students_keyboard(students)
+    )
 
 
 @router.message(F.text == texts.BTN_SECURITY)
@@ -129,7 +126,7 @@ async def btn_about(message: Message) -> None:
 
 @router.message(Command("help"))
 async def cmd_help(message: Message) -> None:
-    await message.answer(texts.HELP, reply_markup=main_menu())
+    await message.answer(texts.HELP)
 
 
 @router.message(Command("cancel"))
@@ -138,20 +135,12 @@ async def cmd_cancel(message: Message, state: FSMContext) -> None:
         await message.answer(texts.NOTHING_TO_CANCEL)
         return
     await state.clear()
-    await message.answer(texts.CANCELLED, reply_markup=main_menu())
+    await message.answer(texts.CANCELLED)
 
 
 @router.callback_query(F.data == "cancel")
 async def cb_cancel(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     if isinstance(callback.message, Message):
-        await edit_message(callback.message, texts.CANCELLED, main_menu())
-    await callback.answer()
-
-
-@router.callback_query(F.data == "menu")
-async def cb_menu(callback: CallbackQuery, state: FSMContext) -> None:
-    await state.clear()
-    if isinstance(callback.message, Message):
-        await edit_message(callback.message, texts.WELCOME, main_menu())
+        await edit_message(callback.message, texts.CANCELLED, back_to_list_keyboard())
     await callback.answer()

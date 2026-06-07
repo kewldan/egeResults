@@ -7,14 +7,6 @@ from ege_notifier.bot import texts
 from ege_notifier.models import Student
 
 
-def main_menu() -> InlineKeyboardMarkup:
-    kb = InlineKeyboardBuilder()
-    kb.button(text="➕ Добавить ученика", callback_data="add_student")
-    kb.button(text="📋 Мои ученики", callback_data="my_students")
-    kb.adjust(1)
-    return kb.as_markup()
-
-
 def main_reply_keyboard() -> ReplyKeyboardMarkup:
     """Постоянная нижняя клавиатура быстрого доступа (живёт между сообщениями)."""
     kb = ReplyKeyboardBuilder()
@@ -41,11 +33,13 @@ def confirm_keyboard() -> InlineKeyboardMarkup:
 
 
 def students_keyboard(students: list[Student]) -> InlineKeyboardMarkup:
-    """Список учеников: по кнопке на ученика, открывающей его карточку с действиями."""
+    """Список учеников: кнопка на каждого (открывает карточку) + «добавить ученика».
+
+    Работает и для пустого списка — тогда остаётся только кнопка добавления."""
     kb = InlineKeyboardBuilder()
     for st in students:
         kb.button(text=f"👤 {st.last_name}", callback_data=f"student:{st.id}")
-    kb.button(text="⬅️ Меню", callback_data="menu")
+    kb.button(text="➕ Добавить ученика", callback_data="add_student")
     kb.adjust(1)
     return kb.as_markup()
 

@@ -20,10 +20,9 @@ WELCOME = (
     "👋 Привет! Я слежу за публикацией результатов ЕГЭ на <b>ege.spb.ru</b> и пришлю "
     "уведомление, как только появятся новые баллы у отслеживаемых учеников.\n\n"
     "Чтобы добавить ученика, понадобятся <b>фамилия</b>, <b>серия</b> и <b>номер "
-    "паспорта</b>. Один аккаунт может отслеживать несколько учеников."
+    "паспорта</b>. Один аккаунт может отслеживать несколько учеников.\n\n"
+    "Кнопки управления — снизу 👇"
 )
-
-CHOOSE_ACTION = "Выберите действие 👇"
 
 SECURITY = (
     "🛡 <b>Безопасность и данные</b>\n\n"
@@ -169,7 +168,14 @@ def students_overview(students: list[Student]) -> str:
         lines.append(
             f"• <b>{st.last_name}</b> ({st.passport_masked}) — {_student_status(st)}"
         )
+    lines.append("")
+    lines.append("Нажмите на ученика — откроется карточка с результатами и действиями.")
     return "\n".join(lines)
+
+
+def students_list_text(students: list[Student]) -> str:
+    """Текст экрана «Мои ученики»: обзор списка или приглашение добавить первого."""
+    return students_overview(students) if students else NO_STUDENTS
 
 
 def _display(value: str | None, score: int | None) -> str:
