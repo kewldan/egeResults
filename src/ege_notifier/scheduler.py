@@ -7,6 +7,7 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from ege_notifier.bot import texts
+from ege_notifier.bot.keyboards import results_link_keyboard
 from ege_notifier.config import Settings
 from ege_notifier.services.notifier import Notifier
 from ege_notifier.services.results import ResultsService
@@ -14,12 +15,16 @@ from ege_notifier.services.results import ResultsService
 logger = logging.getLogger(__name__)
 
 
-async def run_check_cycle(results: ResultsService, notifier: Notifier) -> None:
+async def run_check_cycle(
+    results: ResultsService, notifier: Notifier, settings: Settings
+) -> None:
     """Один цикл: проверить всех учеников и разослать уведомления подписчикам."""
     updates = await results.check_all()
+    markup = results_link_keyboard(settings.results_site_url)
     for upd in updates:
         text = texts.format_results_update(upd.student, upd.changes)
-        await notifier.broadcast(upd.subscribers, text)
+        await notifier.broadcast(upd.subscribers, text, markup)
+        await notifier.notify_admin(texts.admin_new_results(upd.student, upd.changes))
     if updates:
         logger.info("Разослано уведомлений по %d ученик(ам)", len(updates))
 
@@ -40,7 +45,7 @@ def build_scheduler(
     scheduler.add_job(
         run_check_cycle,
         trigger=trigger,
-        args=[results, notifier],
+        args=[results, notifier, settings],
         id="check_results",
         max_instances=1,  # не запускать новый цикл, пока не закончился предыдущий
         coalesce=True,

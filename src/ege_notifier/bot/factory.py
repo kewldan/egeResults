@@ -7,6 +7,7 @@ from aiogram.fsm.storage.base import BaseStorage
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from ege_notifier.bot.handlers import add_student, common, my_students
+from ege_notifier.config import Settings
 from ege_notifier.services.notifier import Notifier
 from ege_notifier.services.results import ResultsService
 from ege_notifier.services.subscriptions import SubscriptionService
@@ -32,6 +33,7 @@ def build_dispatcher(
     subscriptions: SubscriptionService,
     results: ResultsService,
     notifier: Notifier,
+    settings: Settings,
     storage: BaseStorage | None = None,
 ) -> Dispatcher:
     dp = Dispatcher(storage=storage or MemoryStorage())
@@ -39,6 +41,7 @@ def build_dispatcher(
     dp["subscriptions"] = subscriptions
     dp["results"] = results
     dp["notifier"] = notifier
+    dp["settings"] = settings
 
     dp.include_router(common.router)
     dp.include_router(add_student.router)

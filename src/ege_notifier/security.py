@@ -27,6 +27,16 @@ def mask_passport(passport_series: str, passport_number: str) -> str:
     return f"●●●● ●●●●{tail}"
 
 
+def hash_token(token: str) -> str:
+    """SHA-256 от секрета ссылки-приглашения.
+
+    В deep-link уходит сам случайный токен (высокая энтропия — ``token_urlsafe``),
+    а в БД хранится только его хэш: утечка базы не раскрывает живые ссылки. HMAC
+    не нужен — у токена и так 256 бит энтропии, перебор невозможен.
+    """
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
 class Cipher:
     """Шифрование строковых PII-полей (паспорт).
 

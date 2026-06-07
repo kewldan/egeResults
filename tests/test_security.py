@@ -1,6 +1,12 @@
 from __future__ import annotations
 
-from ege_notifier.security import Cipher, identity_hash, mask_passport, normalize_digits
+from ege_notifier.security import (
+    Cipher,
+    hash_token,
+    identity_hash,
+    mask_passport,
+    normalize_digits,
+)
 
 
 def test_normalize_digits():
@@ -33,6 +39,14 @@ def test_cipher_passthrough_without_key():
     assert not cipher.enabled
     assert cipher.encrypt("123456") == "123456"
     assert cipher.decrypt("123456") == "123456"
+
+
+def test_hash_token_is_deterministic_and_hex():
+    a = hash_token("secret-token")
+    assert a == hash_token("secret-token")  # детерминирован
+    assert len(a) == 64 and all(c in "0123456789abcdef" for c in a)  # sha256 hex
+    assert a != hash_token("other-token")  # разные токены — разные хэши
+    assert "secret-token" not in a  # сам токен в хэше не виден
 
 
 def test_mask_passport_shows_tail():

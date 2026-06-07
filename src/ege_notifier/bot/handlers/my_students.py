@@ -2,14 +2,21 @@ from __future__ import annotations
 
 from aiogram import F, Router
 from aiogram.types import CallbackQuery, Message
+from aiogram.utils.deep_linking import create_start_link
 from beanie import PydanticObjectId
 
 from ege_notifier.bot import texts
-from ege_notifier.bot.keyboards import main_menu, students_keyboard
+from ege_notifier.bot.keyboards import (
+    main_menu,
+    results_link_keyboard,
+    student_card_keyboard,
+    students_keyboard,
+)
+from ege_notifier.config import Settings
 from ege_notifier.models import Student
 from ege_notifier.providers.base import StudentNotFoundError
 from ege_notifier.services.notifier import Notifier
-from ege_notifier.services.results import ResultsService
+from ege_notifier.services.results import RefreshThrottled, ResultsService
 from ege_notifier.services.subscriptions import SubscriptionService
 
 router = Router(name="my_students")
@@ -43,16 +50,17 @@ async def list_students(
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("results:"))
-async def show_results(
+@router.callback_query(F.data.startswith("student:"))
+async def open_card(
     callback: CallbackQuery, subscriptions: SubscriptionService
 ) -> None:
+    """Карточка ученика: текущие результаты + действия (обновить/поделиться/удалить)."""
     student_id = _parse_id(callback.data or "")
     if student_id is None:
         await callback.answer("Некорректный идентификатор", show_alert=True)
         return
-    # Авторизация: показываем сохранённые баллы (PII) только своим подписчикам,
-    # иначе подделанный callback дал бы доступ к результатам чужого ученика.
+    # Авторизация: карточку (PII-баллы) показываем только подписчикам — иначе
+    # подделанный callback дал бы доступ к результатам чужого ученика.
     if callback.from_user.id not in await subscriptions.subscribers_for(student_id):
         await callback.answer("Ученик не найден", show_alert=True)
         return
@@ -62,7 +70,34 @@ async def show_results(
         return
     await callback.answer()
     if isinstance(callback.message, Message):
-        await callback.message.answer(texts.format_current_results(student))
+        await callback.message.answer(
+            texts.format_current_results(student),
+            reply_markup=student_card_keyboard(student_id),
+        )
+
+
+@router.callback_query(F.data.startswith("share:"))
+async def share_student(
+    callback: CallbackQuery,
+    subscriptions: SubscriptionService,
+    settings: Settings,
+) -> None:
+    """Выдаёт одноразовую ссылку-приглашение (получатель не узнает паспорт)."""
+    student_id = _parse_id(callback.data or "")
+    if student_id is None:
+        await callback.answer("Некорректный идентификатор", show_alert=True)
+        return
+    # Авторизация (подписчик?) — внутри create_share_token: вернёт None, если нет.
+    token = await subscriptions.create_share_token(student_id, callback.from_user.id)
+    if token is None:
+        await callback.answer("Ученик не найден", show_alert=True)
+        return
+    await callback.answer()
+    if not isinstance(callback.message, Message) or callback.bot is None:
+        return
+    link = await create_start_link(callback.bot, token)
+    ttl = texts.human_duration(settings.share_link_ttl_seconds)
+    await callback.message.answer(texts.SHARE_LINK.format(link=link, ttl=ttl))
 
 
 @router.callback_query(F.data.startswith("del:"))
@@ -88,6 +123,7 @@ async def check_now(
     subscriptions: SubscriptionService,
     results: ResultsService,
     notifier: Notifier,
+    settings: Settings,
 ) -> None:
     student_id = _parse_id(callback.data or "")
     if student_id is None:
@@ -112,19 +148,25 @@ async def check_now(
         return
 
     try:
-        changes = await results.check_student(student)
+        changes = await results.check_student(student, manual=True)
     except StudentNotFoundError:
         await callback.message.answer(
             texts.STUDENT_NOT_FOUND.format(label=student.label)
         )
         return
+    except RefreshThrottled as exc:
+        # Источник опрашивали слишком недавно (общий лимит на ученика) — не дёргаем сайт.
+        await callback.message.answer(texts.refresh_throttled(exc.retry_after))
+        return
 
     if changes:
         text = texts.format_results_update(student, changes)
-        await callback.message.answer(text)  # инициатору — сразу, в текущий чат
+        markup = results_link_keyboard(settings.results_site_url)
+        await callback.message.answer(text, reply_markup=markup)  # инициатору — сразу
         # check_student уже записал снимок в БД → плановая проверка эти изменения
         # больше не увидит; уведомляем остальных подписчиков, иначе они пропустят.
         others = [tid for tid in subscriber_ids if tid != callback.from_user.id]
-        await notifier.broadcast(others, text)
+        await notifier.broadcast(others, text, markup)
+        await notifier.notify_admin(texts.admin_new_results(student, changes))
     else:
         await callback.message.answer(texts.NO_CHANGES.format(label=student.label))

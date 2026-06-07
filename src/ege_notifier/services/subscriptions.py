@@ -1,20 +1,24 @@
 from __future__ import annotations
 
 import logging
+import secrets
+from datetime import timedelta
 
 from beanie import PydanticObjectId
 from beanie.operators import In
 from pymongo.errors import DuplicateKeyError
 
 from ege_notifier.config import Settings
-from ege_notifier.models import Student, Subscription, User
+from ege_notifier.models import ShareToken, Student, Subscription, User
 from ege_notifier.providers.base import StudentQuery
 from ege_notifier.security import (
     Cipher,
+    hash_token,
     identity_hash,
     mask_passport,
     normalize_digits,
 )
+from ege_notifier.utils import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +32,8 @@ class SubscriptionService:
 
     async def upsert_user(
         self, telegram_id: int, username: str | None, full_name: str | None
-    ) -> User:
+    ) -> tuple[User, bool]:
+        """Создаёт или обновляет пользователя. Возвращает (пользователь, создан_ли_новый)."""
         user = await User.find_one(User.telegram_id == telegram_id)
         if user is None:
             candidate = User(
@@ -36,7 +41,7 @@ class SubscriptionService:
             )
             try:
                 await candidate.insert()
-                return candidate
+                return candidate, True
             except DuplicateKeyError:
                 # Гонка (двойной /start) — запись уже создана параллельно; перечитываем.
                 user = await User.find_one(User.telegram_id == telegram_id)
@@ -52,7 +57,7 @@ class SubscriptionService:
             user.is_active, changed = True, True
         if changed:
             await user.save()
-        return user
+        return user, False
 
     async def get_or_create_student(
         self, last_name: str, passport_series: str, passport_number: str
@@ -152,6 +157,62 @@ class SubscriptionService:
         for sub in await Subscription.find_all().to_list():
             grouped.setdefault(sub.student_id, []).append(sub.telegram_id)
         return grouped
+
+    # --- шеринг ученика по одноразовой ссылке ---------------------------------
+
+    async def create_share_token(
+        self, student_id: PydanticObjectId, telegram_id: int
+    ) -> str | None:
+        """Создаёт одноразовую ссылку-приглашение на ученика.
+
+        Возвращает секрет для deep-link (его кладут в ``?start=``), либо ``None``,
+        если запросивший не подписан на ученика — делиться чужим учеником нельзя
+        (иначе по подделанному callback можно было бы выписать ссылку на любого).
+
+        В deep-link уходит сам токен, а в БД сохраняется только его хэш."""
+        if telegram_id not in await self.subscribers_for(student_id):
+            return None
+        token = secrets.token_urlsafe(32)
+        expires_at = utcnow() + timedelta(seconds=self._settings.share_link_ttl_seconds)
+        await ShareToken(
+            token_hash=hash_token(token),
+            student_id=student_id,
+            created_by=telegram_id,
+            expires_at=expires_at,
+        ).insert()
+        logger.info(
+            "Создана ссылка-приглашение: tg=%s -> ученик=%s", telegram_id, student_id
+        )
+        return token
+
+    async def redeem_share_token(self, token: str, telegram_id: int) -> Student | None:
+        """Гасит одноразовую ссылку и подписывает её получателя на ученика.
+
+        Возвращает ученика при успехе, иначе ``None`` (токен неверный, просрочен
+        или уже использован). Получатель НЕ видит паспортных данных — становится
+        обычным подписчиком (фамилия + маскированный паспорт, как у всех)."""
+        if not token:
+            return None
+        # Атомарное гашение: победитель гонки получает документ, остальные — None
+        # (одноразовость). Фильтр по expires_at — на случай, если TTL-индекс ещё не
+        # успел удалить просроченный токен (sweep раз в ~минуту).
+        doc = await ShareToken.get_pymongo_collection().find_one_and_delete(
+            {"token_hash": hash_token(token), "expires_at": {"$gt": utcnow()}}
+        )
+        if doc is None:
+            return None
+        student = await Student.get(doc["student_id"])
+        if student is None:
+            return None  # ученик удалён (последний подписчик отписался)
+        assert student.id is not None  # получен через Student.get
+        try:
+            await Subscription(telegram_id=telegram_id, student_id=student.id).insert()
+            logger.info(
+                "Подписка по ссылке: tg=%s -> ученик=%s", telegram_id, student.id
+            )
+        except DuplicateKeyError:
+            pass  # уже подписан — ссылка всё равно погашена (одноразовая)
+        return student
 
     def to_query(self, student: Student) -> StudentQuery:
         """Готовит запрос к источнику, расшифровывая паспортные данные."""

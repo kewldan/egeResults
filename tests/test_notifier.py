@@ -20,7 +20,9 @@ class FakeBot:
         self._fail = fail_ids or set()
         self._retry_pending = set(retry_ids or set())
 
-    async def send_message(self, telegram_id: int, text: str) -> None:
+    async def send_message(
+        self, telegram_id: int, text: str, reply_markup: object = None
+    ) -> None:
         if telegram_id in self._fail:
             raise TelegramBadRequest(method=cast(Any, None), message="bad request")
         if telegram_id in self._retry_pending:
@@ -52,6 +54,20 @@ async def test_send_retries_once_on_rate_limit():
     notifier = Notifier(cast(Bot, bot), broadcast_delay=0)
     assert await notifier.send(1, "hi") is True
     assert bot.sent == [(1, "hi")]
+
+
+async def test_notify_admin_sends_when_configured():
+    bot = FakeBot()
+    notifier = Notifier(cast(Bot, bot), broadcast_delay=0, admin_id=777)
+    assert await notifier.notify_admin("ping") is True
+    assert bot.sent == [(777, "ping")]
+
+
+async def test_notify_admin_noop_without_admin_id():
+    bot = FakeBot()
+    notifier = Notifier(cast(Bot, bot), broadcast_delay=0)
+    assert await notifier.notify_admin("ping") is False
+    assert bot.sent == []
 
 
 async def test_broadcast_throttles_between_messages(monkeypatch):

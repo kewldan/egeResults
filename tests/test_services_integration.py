@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from datetime import timedelta
 from types import SimpleNamespace
 from typing import cast
 
@@ -22,15 +23,16 @@ from beanie import init_beanie
 from pymongo import AsyncMongoClient
 
 from ege_notifier.config import Settings
-from ege_notifier.models import ALL_DOCUMENTS, Student, Subscription
+from ege_notifier.models import ALL_DOCUMENTS, ShareToken, Student, Subscription
 from ege_notifier.providers.base import (
     FetchedResult,
     ResultsProvider,
     StudentNotFoundError,
 )
-from ege_notifier.security import Cipher
-from ege_notifier.services.results import ResultsService
+from ege_notifier.security import Cipher, hash_token
+from ege_notifier.services.results import RefreshThrottled, ResultsService
 from ege_notifier.services.subscriptions import SubscriptionService
+from ege_notifier.utils import utcnow
 
 
 def _settings(**kwargs: object) -> Settings:
@@ -292,6 +294,176 @@ async def test_check_all_skips_students_without_subscribers():
         assert len(updates) == 1
         assert updates[0].student.id == tracked.id
         assert updates[0].subscribers == [1]
+    finally:
+        await client.drop_database(TEST_DB)
+        await client.close()
+
+
+# --- ручная проверка: кулдаун на ученика -----------------------------------
+
+
+def _services_with_cooldown(cooldown: int, fetched: list[FetchedResult]):
+    settings = _settings(
+        identity_secret="test-secret",
+        request_delay=0,
+        manual_check_cooldown_seconds=cooldown,
+    )
+    subs = SubscriptionService(settings, Cipher(None))
+    provider = _provider(_make_fetch(fetched))
+    return subs, ResultsService(settings, provider, subs)
+
+
+async def test_manual_check_is_throttled_within_cooldown():
+    fetched = [FetchedResult(subject="русский язык", score=88, value="88")]
+    client = await _fresh_db()
+    try:
+        subs, results = _services_with_cooldown(300, fetched)
+        student, _ = await subs.subscribe(1, "Иванов", "4022", "083074")
+        # Первая ручная проверка проходит и проставляет last_checked_at.
+        assert len(await results.check_student(student, manual=True)) == 1
+        # Вторая — внутри окна кулдауна — отклоняется (источник не дёргаем).
+        with pytest.raises(RefreshThrottled) as exc:
+            await results.check_student(student, manual=True)
+        assert exc.value.retry_after > 0
+    finally:
+        await client.drop_database(TEST_DB)
+        await client.close()
+
+
+async def test_scheduled_check_ignores_cooldown():
+    """Плановая проверка (manual=False) кулдауну не подчиняется."""
+    fetched = [FetchedResult(subject="русский язык", score=88, value="88")]
+    client = await _fresh_db()
+    try:
+        subs, results = _services_with_cooldown(300, fetched)
+        student, _ = await subs.subscribe(1, "Иванов", "4022", "083074")
+        await results.check_student(student, manual=True)
+        # Сразу после — без manual: не бросает, просто нет новых изменений.
+        assert await results.check_student(student) == []
+    finally:
+        await client.drop_database(TEST_DB)
+        await client.close()
+
+
+async def test_manual_check_allowed_after_cooldown_elapses():
+    """Кулдаун=0 фактически отключает лимит — повторная ручная проверка проходит."""
+    fetched = [FetchedResult(subject="русский язык", score=88, value="88")]
+    client = await _fresh_db()
+    try:
+        subs, results = _services_with_cooldown(0, fetched)
+        student, _ = await subs.subscribe(1, "Иванов", "4022", "083074")
+        await results.check_student(student, manual=True)
+        # cooldown=0 → второй раз не throttle (изменений нет, но без исключения).
+        assert await results.check_student(student, manual=True) == []
+    finally:
+        await client.drop_database(TEST_DB)
+        await client.close()
+
+
+# --- одноразовые ссылки-приглашения (шеринг) -------------------------------
+
+
+def _share_subs() -> SubscriptionService:
+    return SubscriptionService(
+        _settings(
+            identity_secret="test-secret",
+            request_delay=0,
+            share_link_ttl_seconds=86400,
+        ),
+        Cipher(None),
+    )
+
+
+async def test_share_token_subscribes_recipient_without_pii():
+    client = await _fresh_db()
+    try:
+        subs = _share_subs()
+        student, _ = await subs.subscribe(1, "Иванов", "4022", "083074")
+        assert student.id is not None
+        token = await subs.create_share_token(student.id, telegram_id=1)
+        assert token is not None
+
+        # Получатель (2) гасит ссылку и подписывается на того же ученика.
+        redeemed = await subs.redeem_share_token(token, telegram_id=2)
+        assert redeemed is not None and redeemed.id == student.id
+        assert set(await subs.subscribers_for(student.id)) == {1, 2}
+
+        # Получатель видит лишь маскированный паспорт — расшифрованных данных в БД нет.
+        reloaded = await Student.get(student.id)
+        assert reloaded is not None
+        assert reloaded.passport_masked.endswith("74")
+    finally:
+        await client.drop_database(TEST_DB)
+        await client.close()
+
+
+async def test_share_token_is_one_time():
+    client = await _fresh_db()
+    try:
+        subs = _share_subs()
+        student, _ = await subs.subscribe(1, "Иванов", "4022", "083074")
+        assert student.id is not None
+        token = await subs.create_share_token(student.id, telegram_id=1)
+        assert token is not None
+        assert await subs.redeem_share_token(token, telegram_id=2) is not None
+        # Повторное использование той же ссылки невозможно.
+        assert await subs.redeem_share_token(token, telegram_id=3) is None
+        assert 3 not in await subs.subscribers_for(student.id)
+    finally:
+        await client.drop_database(TEST_DB)
+        await client.close()
+
+
+async def test_concurrent_redeem_consumes_token_once():
+    """Гонка двух получателей одной ссылки: подписывается ровно один."""
+    client = await _fresh_db()
+    try:
+        subs = _share_subs()
+        student, _ = await subs.subscribe(1, "Иванов", "4022", "083074")
+        assert student.id is not None
+        token = await subs.create_share_token(student.id, telegram_id=1)
+        assert token is not None
+        a, b = await asyncio.gather(
+            subs.redeem_share_token(token, telegram_id=2),
+            subs.redeem_share_token(token, telegram_id=3),
+        )
+        # Ровно один получил ученика (одноразовый find_one_and_delete).
+        assert (a is None) != (b is None)
+    finally:
+        await client.drop_database(TEST_DB)
+        await client.close()
+
+
+async def test_create_share_token_rejects_non_subscriber():
+    client = await _fresh_db()
+    try:
+        subs = _share_subs()
+        student, _ = await subs.subscribe(1, "Иванов", "4022", "083074")
+        assert student.id is not None
+        # Пользователь 999 не подписан → ссылку выписать нельзя.
+        assert await subs.create_share_token(student.id, telegram_id=999) is None
+    finally:
+        await client.drop_database(TEST_DB)
+        await client.close()
+
+
+async def test_redeem_invalid_or_expired_token_returns_none():
+    client = await _fresh_db()
+    try:
+        subs = _share_subs()
+        student, _ = await subs.subscribe(1, "Иванов", "4022", "083074")
+        assert student.id is not None
+        # Несуществующий токен.
+        assert await subs.redeem_share_token("nope", telegram_id=2) is None
+        # Просроченный токен (вставлен напрямую с прошедшим expires_at).
+        await ShareToken(
+            token_hash=hash_token("expired"),
+            student_id=student.id,
+            created_by=1,
+            expires_at=utcnow() - timedelta(seconds=1),
+        ).insert()
+        assert await subs.redeem_share_token("expired", telegram_id=2) is None
+        assert 2 not in await subs.subscribers_for(student.id)
     finally:
         await client.drop_database(TEST_DB)
         await client.close()

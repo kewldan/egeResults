@@ -50,6 +50,29 @@ def test_format_current_results_empty_is_not_header_only():
     assert not text.endswith("\n")  # не «голый» заголовок с пустой строкой
 
 
+def test_human_duration_rounds_up_with_russian_plurals():
+    assert texts.human_duration(45) == "45 секунд"
+    assert texts.human_duration(1) == "1 секунду"
+    assert texts.human_duration(300) == "5 минут"
+    assert texts.human_duration(61) == "2 минуты"  # округление вверх
+    assert texts.human_duration(86400) == "24 часа"
+
+
+def test_refresh_throttled_mentions_wait_time():
+    text = texts.refresh_throttled(120)
+    assert "2 минуты" in text
+    assert "Обновить" in text
+
+
+def test_admin_new_user_includes_id_and_username():
+    user = cast(
+        Student,
+        SimpleNamespace(telegram_id=42, username="vasya", full_name="Вася Пупкин"),
+    )
+    text = texts.admin_new_user(user)
+    assert "42" in text and "@vasya" in text and "Вася Пупкин" in text
+
+
 def test_format_results_update_new_and_updated():
     changes = [
         ResultChange(

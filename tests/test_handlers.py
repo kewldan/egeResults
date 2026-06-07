@@ -18,6 +18,7 @@ from beanie import PydanticObjectId
 from ege_notifier.bot.handlers import add_student, my_students
 from ege_notifier.providers.base import StudentNotFoundError
 from ege_notifier.services.diff import ChangeType, ResultChange
+from ege_notifier.services.results import RefreshThrottled
 
 
 # --- двойники Telegram --------------------------------------------------------
@@ -36,6 +37,9 @@ class FakeCallback:
         self.message = message
         self.from_user = SimpleNamespace(id=user_id, username=None, full_name=None)
         self.data = data
+        self.bot = (
+            SimpleNamespace()
+        )  # для create_start_link (в тестах monkeypatch'ится)
         self.answered: list[str | None] = []
 
     async def answer(self, text=None, show_alert=False):
@@ -57,25 +61,38 @@ class FakeNotifier:
     def __init__(self):
         self.sent: list[tuple[int, str]] = []
         self.broadcasts: list[tuple[list[int], str]] = []
+        self.admin: list[str] = []
 
-    async def send(self, telegram_id, text):
+    async def send(self, telegram_id, text, reply_markup=None):
         self.sent.append((telegram_id, text))
         return True
 
-    async def broadcast(self, telegram_ids, text):
+    async def broadcast(self, telegram_ids, text, reply_markup=None):
         ids = list(telegram_ids)
         self.broadcasts.append((ids, text))
         return len(ids)
+
+    async def notify_admin(self, text):
+        self.admin.append(text)
+        return True
+
+
+# Заглушка настроек: хендлерам нужны лишь URL сайта и TTL ссылки-приглашения.
+SETTINGS = SimpleNamespace(
+    results_site_url="https://www.ege.spb.ru/result/index.php?mode=ege2026&wave=1",
+    share_link_ttl_seconds=86400,
+)
 
 
 # --- двойники сервисов --------------------------------------------------------
 
 
 class FakeSubscriptions:
-    def __init__(self, student, created, subscribers):
+    def __init__(self, student, created, subscribers, share_token="tok123"):
         self._student = student
         self._created = created
         self._subscribers = subscribers
+        self._share_token = share_token
 
     async def subscribe(self, telegram_id, last_name, series, number):
         return self._student, self._created
@@ -83,20 +100,33 @@ class FakeSubscriptions:
     async def subscribers_for(self, student_id):
         return list(self._subscribers)
 
+    async def create_share_token(self, student_id, telegram_id):
+        # Подписчик получает токен; не-подписчик — None (как в реальном сервисе).
+        if telegram_id not in self._subscribers:
+            return None
+        return self._share_token
+
 
 class FakeResults:
     def __init__(self, changes):
         self._changes = changes
 
-    async def check_student(self, student):
+    async def check_student(self, student, *, manual=False):
         return self._changes
 
 
 class FakeResultsNotFound:
     """check_student бросает StudentNotFoundError — как при опечатке в данных."""
 
-    async def check_student(self, student):
+    async def check_student(self, student, *, manual=False):
         raise StudentNotFoundError("not found")
+
+
+class FakeResultsThrottled:
+    """check_student бросает RefreshThrottled — как при срабатывании кулдауна."""
+
+    async def check_student(self, student, *, manual=False):
+        raise RefreshThrottled(retry_after=120)
 
 
 def _student(results=None):
@@ -147,7 +177,9 @@ async def test_confirm_add_sends_snapshot_to_new_subscriber(monkeypatch):
         {"last_name": "Иванов", "passport_series": "4022", "passport_number": "083074"}
     )
 
-    await add_student.confirm_add(callback, state, subs, FakeResults([]), notifier)
+    await add_student.confirm_add(
+        callback, state, subs, FakeResults([]), notifier, SETTINGS
+    )
 
     # Новому подписчику ушёл снимок текущих результатов; рассылки нет (изменений нет).
     assert [tid for tid, _ in notifier.sent] == [7]
@@ -167,7 +199,7 @@ async def test_confirm_add_warns_when_student_not_found(monkeypatch):
     )
 
     await add_student.confirm_add(
-        callback, state, subs, FakeResultsNotFound(), notifier
+        callback, state, subs, FakeResultsNotFound(), notifier, SETTINGS
     )
 
     # Пользователю подсказали проверить данные; рассылок/снимков нет.
@@ -187,7 +219,7 @@ async def test_confirm_add_broadcasts_new_results_to_all_subscribers(monkeypatch
     )
 
     await add_student.confirm_add(
-        callback, state, subs, FakeResults([_new_change()]), notifier
+        callback, state, subs, FakeResults([_new_change()]), notifier, SETTINGS
     )
 
     # Найденные при проверке изменения уходят ВСЕМ подписчикам, а не только инициатору.
@@ -195,6 +227,9 @@ async def test_confirm_add_broadcasts_new_results_to_all_subscribers(monkeypatch
     ids, text = notifier.broadcasts[0]
     assert ids == [2, 7]
     assert "Математика" in text
+    # Админ тоже получил уведомление о новом результате.
+    assert len(notifier.admin) == 1
+    assert "Математика" in notifier.admin[0]
 
 
 # --- check_now ----------------------------------------------------------------
@@ -218,13 +253,16 @@ async def test_check_now_notifies_other_subscribers_and_replies_inline(monkeypat
     message = FakeMessage()
     callback = FakeCallback(message, user_id=1, data=f"check:{student.id}")
 
-    await my_students.check_now(callback, subs, FakeResults([_new_change()]), notifier)
+    await my_students.check_now(
+        callback, subs, FakeResults([_new_change()]), notifier, SETTINGS
+    )
 
     # Инициатору (1) — сразу в чат; остальным подписчикам (2, 3) — рассылкой, без дубля себе.
     assert any("Математика" in a for a in message.answers)
     assert len(notifier.broadcasts) == 1
     ids, _ = notifier.broadcasts[0]
     assert ids == [2, 3]
+    assert len(notifier.admin) == 1  # админ оповещён о новом результате
 
 
 async def test_check_now_warns_when_student_not_found(monkeypatch):
@@ -236,7 +274,9 @@ async def test_check_now_warns_when_student_not_found(monkeypatch):
     message = FakeMessage()
     callback = FakeCallback(message, user_id=1, data=f"check:{student.id}")
 
-    await my_students.check_now(callback, subs, FakeResultsNotFound(), notifier)
+    await my_students.check_now(
+        callback, subs, FakeResultsNotFound(), notifier, SETTINGS
+    )
 
     assert any("не нашлось" in a for a in message.answers)
     assert notifier.broadcasts == []
@@ -251,7 +291,9 @@ async def test_check_now_rejects_non_subscriber(monkeypatch):
     message = FakeMessage()
     callback = FakeCallback(message, user_id=1, data=f"check:{student.id}")
 
-    await my_students.check_now(callback, subs, FakeResults([_new_change()]), notifier)
+    await my_students.check_now(
+        callback, subs, FakeResults([_new_change()]), notifier, SETTINGS
+    )
 
     # Не подписан → проверка не запускается, инлайн-ответа и рассылки нет.
     assert message.answers == []
@@ -259,29 +301,29 @@ async def test_check_now_rejects_non_subscriber(monkeypatch):
     assert callback.answered == ["Ученик не найден"]
 
 
-async def test_show_results_sends_snapshot_to_subscriber(monkeypatch):
+async def test_open_card_sends_snapshot_to_subscriber(monkeypatch):
     monkeypatch.setattr(my_students, "Message", FakeMessage)
     student = _student(results=[_result_item()])
     _patch_student_get(monkeypatch, student)
     subs = FakeSubscriptions(student, created=False, subscribers=[1, 2])
     message = FakeMessage()
-    callback = FakeCallback(message, user_id=1, data=f"results:{student.id}")
+    callback = FakeCallback(message, user_id=1, data=f"student:{student.id}")
 
-    await my_students.show_results(callback, subs)
+    await my_students.open_card(callback, subs)
 
     # Подписчику показали сохранённый снимок баллов (без проверки источника).
     assert any("Русский язык" in a for a in message.answers)
 
 
-async def test_show_results_rejects_non_subscriber(monkeypatch):
+async def test_open_card_rejects_non_subscriber(monkeypatch):
     monkeypatch.setattr(my_students, "Message", FakeMessage)
     student = _student(results=[_result_item()])
     _patch_student_get(monkeypatch, student)
     subs = FakeSubscriptions(student, created=False, subscribers=[2, 3])
     message = FakeMessage()
-    callback = FakeCallback(message, user_id=1, data=f"results:{student.id}")
+    callback = FakeCallback(message, user_id=1, data=f"student:{student.id}")
 
-    await my_students.show_results(callback, subs)
+    await my_students.open_card(callback, subs)
 
     # Не подписан → результаты чужого ученика не утекают.
     assert message.answers == []
@@ -297,7 +339,61 @@ async def test_check_now_no_changes_does_not_broadcast(monkeypatch):
     message = FakeMessage()
     callback = FakeCallback(message, user_id=1, data=f"check:{student.id}")
 
-    await my_students.check_now(callback, subs, FakeResults([]), notifier)
+    await my_students.check_now(callback, subs, FakeResults([]), notifier, SETTINGS)
 
     assert notifier.broadcasts == []
     assert any("Новых результатов" in a for a in message.answers)
+
+
+async def test_check_now_throttled_tells_user_to_wait(monkeypatch):
+    monkeypatch.setattr(my_students, "Message", FakeMessage)
+    student = _student()
+    _patch_student_get(monkeypatch, student)
+    subs = FakeSubscriptions(student, created=False, subscribers=[1, 2, 3])
+    notifier = FakeNotifier()
+    message = FakeMessage()
+    callback = FakeCallback(message, user_id=1, data=f"check:{student.id}")
+
+    await my_students.check_now(
+        callback, subs, FakeResultsThrottled(), notifier, SETTINGS
+    )
+
+    # Кулдаун: сайт не дёргаем, инициатору — «подождите», рассылки/админа нет.
+    assert any("Обновить" in a for a in message.answers)
+    assert notifier.broadcasts == []
+    assert notifier.admin == []
+
+
+# --- share_student ------------------------------------------------------------
+
+
+async def test_share_student_sends_link_to_subscriber(monkeypatch):
+    monkeypatch.setattr(my_students, "Message", FakeMessage)
+
+    async def fake_link(bot, token):
+        return f"https://t.me/bot?start={token}"
+
+    monkeypatch.setattr(my_students, "create_start_link", fake_link)
+    student = _student()
+    subs = FakeSubscriptions(student, created=False, subscribers=[1, 2])
+    message = FakeMessage()
+    callback = FakeCallback(message, user_id=1, data=f"share:{student.id}")
+
+    await my_students.share_student(callback, subs, SETTINGS)
+
+    # Подписчику пришла ссылка-приглашение с токеном.
+    assert any("start=tok123" in a for a in message.answers)
+
+
+async def test_share_student_rejects_non_subscriber(monkeypatch):
+    monkeypatch.setattr(my_students, "Message", FakeMessage)
+    student = _student()
+    subs = FakeSubscriptions(student, created=False, subscribers=[2, 3])
+    message = FakeMessage()
+    callback = FakeCallback(message, user_id=1, data=f"share:{student.id}")
+
+    await my_students.share_student(callback, subs, SETTINGS)
+
+    # Не подписан → ссылку не выдаём.
+    assert message.answers == []
+    assert callback.answered == ["Ученик не найден"]

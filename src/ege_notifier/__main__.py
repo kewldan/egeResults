@@ -43,11 +43,11 @@ async def main() -> None:
     provider = build_provider(settings)
     subscriptions = SubscriptionService(settings, cipher)
     bot = build_bot(settings.bot_token)
-    notifier = Notifier(bot, settings.broadcast_delay)
+    notifier = Notifier(bot, settings.broadcast_delay, settings.admin_id)
     results = ResultsService(settings, provider, subscriptions)
 
     storage = build_storage(settings.redis_url)
-    dp = build_dispatcher(subscriptions, results, notifier, storage)
+    dp = build_dispatcher(subscriptions, results, notifier, settings, storage)
     scheduler = build_scheduler(settings, results, notifier)
     scheduler.start()
     logger.info(
@@ -59,7 +59,7 @@ async def main() -> None:
     # Держим ссылку на задачу: иначе её может собрать GC, а исключения — потеряться.
     startup_task: asyncio.Task | None = None
     if settings.check_on_startup:
-        startup_task = asyncio.create_task(run_check_cycle(results, notifier))
+        startup_task = asyncio.create_task(run_check_cycle(results, notifier, settings))
         startup_task.add_done_callback(_log_task_exception)
 
     try:

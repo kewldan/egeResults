@@ -26,6 +26,19 @@ class StudentUpdate:
     subscribers: list[int]
 
 
+class RefreshThrottled(Exception):
+    """Ручная проверка запрошена слишком рано после предыдущей (кулдаун на ученика).
+
+    Лимит общий для всех подписчиков ученика: если источник опрашивали меньше
+    кулдауна назад (другим подписчиком или плановой проверкой), повторная ручная
+    проверка отклоняется. ``retry_after`` — сколько секунд осталось ждать.
+    """
+
+    def __init__(self, retry_after: float):
+        self.retry_after = retry_after
+        super().__init__(f"refresh throttled, retry after {retry_after:.0f}s")
+
+
 class ResultsService:
     """Получение результатов у источника, вычисление изменений и их сохранение."""
 
@@ -54,23 +67,47 @@ class ResultsService:
             lock = self._locks[student_id] = asyncio.Lock()
         return lock
 
-    async def check_student(self, student: Student) -> list[ResultChange]:
-        """Проверяет одного ученика, обновляет его результаты в БД и возвращает изменения."""
+    @staticmethod
+    def _sync_snapshot(student: Student, latest: Student) -> None:
+        """Переносит актуальные поля проверки из перечитанного документа в ``student``."""
+        student.results = latest.results
+        student.last_checked_at = latest.last_checked_at
+        student.last_changed_at = latest.last_changed_at
+        student.last_error = latest.last_error
+        student.not_found = latest.not_found
+
+    async def check_student(
+        self, student: Student, *, manual: bool = False
+    ) -> list[ResultChange]:
+        """Проверяет одного ученика, обновляет его результаты в БД и возвращает изменения.
+
+        ``manual=True`` (проверка по кнопке/подписке) включает анти-спам кулдаун:
+        если источник опрашивали меньше ``manual_check_cooldown_seconds`` назад,
+        бросается ``RefreshThrottled`` — и фетча не происходит. Плановая проверка
+        (``manual=False``) кулдаун не применяет."""
         if student.id is None:
             return await self._check_student_locked(student)
         async with self._lock_for(student.id):
             # Перечитываем актуальный снимок под блокировкой: если параллельная
-            # проверка уже сохранила результаты, diff не выдаст их повторно.
+            # проверка уже сохранила результаты, diff не выдаст их повторно, а
+            # кулдаун сверяется с зафиксированным в БД временем (а не устаревшим).
             latest = await Student.get(student.id)
             if latest is None:
                 # Ученик удалён (последняя отписка) — не воскрешаем его.
                 return []
-            student.results = latest.results
-            student.last_checked_at = latest.last_checked_at
-            student.last_changed_at = latest.last_changed_at
-            student.last_error = latest.last_error
-            student.not_found = latest.not_found
+            self._sync_snapshot(student, latest)
+            if manual:
+                self._enforce_cooldown(latest)
             return await self._check_student_locked(student)
+
+    def _enforce_cooldown(self, latest: Student) -> None:
+        """Бросает ``RefreshThrottled``, если ученика проверяли слишком недавно."""
+        cooldown = self._settings.manual_check_cooldown_seconds
+        if cooldown <= 0 or latest.last_checked_at is None:
+            return
+        elapsed = (utcnow() - latest.last_checked_at).total_seconds()
+        if elapsed < cooldown:
+            raise RefreshThrottled(cooldown - elapsed)
 
     async def _persist(self, student: Student) -> bool:
         """Сохраняет ученика, НЕ воскрешая удалённую запись.

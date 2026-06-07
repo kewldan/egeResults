@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from ege_notifier.models import Student
+import math
+
+from ege_notifier.models import Student, User
 from ege_notifier.services.diff import ChangeType, ResultChange
 
 WELCOME = (
@@ -49,6 +51,52 @@ STUDENT_NOT_FOUND = (
     "я продолжу проверять автоматически."
 )
 
+SHARE_LINK = (
+    "🔗 <b>Одноразовая ссылка-приглашение</b>\n\n"
+    "Перешлите её тому, с кем хотите поделиться отслеживанием. Перейдя по ссылке, "
+    "человек начнёт получать уведомления о результатах этого ученика, но "
+    "<b>не увидит паспортных данных</b>.\n\n"
+    "Ссылка сработает <b>только один раз</b> и действует {ttl}:\n\n{link}"
+)
+
+SHARE_REDEEMED = (
+    "✅ Готово! По приглашению вы теперь отслеживаете результаты: <b>{label}</b>."
+)
+
+SHARE_INVALID = (
+    "⚠️ Ссылка-приглашение недействительна: она уже использована, истекла или указана "
+    "с ошибкой. Попросите отправителя сгенерировать новую."
+)
+
+
+def _plural(n: int, one: str, few: str, many: str) -> str:
+    """Русское склонение существительного после числа (1 час, 2 часа, 5 часов)."""
+    if n % 10 == 1 and n % 100 != 11:
+        return one
+    if 2 <= n % 10 <= 4 and not (12 <= n % 100 <= 14):
+        return few
+    return many
+
+
+def human_duration(seconds: float) -> str:
+    """Человекочитаемая длительность с округлением ВВЕРХ (для «осталось ждать N»)."""
+    total = max(math.ceil(seconds), 1)
+    if total < 60:
+        return f"{total} {_plural(total, 'секунду', 'секунды', 'секунд')}"
+    if total < 3600:
+        m = math.ceil(total / 60)
+        return f"{m} {_plural(m, 'минуту', 'минуты', 'минут')}"
+    h = math.ceil(total / 3600)
+    return f"{h} {_plural(h, 'час', 'часа', 'часов')}"
+
+
+def refresh_throttled(retry_after: float) -> str:
+    return (
+        "⏳ Этого ученика недавно уже проверяли. Обновить вручную можно через "
+        f"{human_duration(retry_after)} — чтобы не нагружать сайт лишними запросами "
+        "(лимит общий на всех подписчиков). Новые результаты придут автоматически."
+    )
+
 
 def confirm_text(data: dict) -> str:
     return (
@@ -80,7 +128,10 @@ def students_overview(students: list[Student]) -> str:
             f"• <b>{st.last_name}</b> ({st.passport_masked}) — {_student_status(st)}"
         )
     lines.append("")
-    lines.append("📊 — текущие результаты, 🔄 — проверить сейчас, 🗑 — удалить.")
+    lines.append(
+        "📊 — текущие результаты, 🔄 — проверить сейчас, "
+        "🔗 — поделиться (без паспорта), 🗑 — удалить."
+    )
     return "\n".join(lines)
 
 
@@ -106,6 +157,21 @@ def format_current_results(student: Student) -> str:
         status = f" · {item.status}" if item.status else ""
         lines.append(f"• <b>{title}</b>: {value}{status}")
     return "\n".join(lines)
+
+
+def admin_new_results(student: Student, changes: list[ResultChange]) -> str:
+    """Служебное уведомление админу о новых результатах у любого ученика."""
+    return "🛎 <b>[админ]</b>\n\n" + format_results_update(student, changes)
+
+
+def admin_new_user(user: User) -> str:
+    """Служебное уведомление админу о новом пользователе бота."""
+    parts = [f"id <code>{user.telegram_id}</code>"]
+    if user.username:
+        parts.append(f"@{user.username}")
+    if user.full_name:
+        parts.append(user.full_name)
+    return "🆕 <b>[админ]</b> Новый пользователь: " + ", ".join(parts)
 
 
 def format_results_update(student: Student, changes: list[ResultChange]) -> str:
