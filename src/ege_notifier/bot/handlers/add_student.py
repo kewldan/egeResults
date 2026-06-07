@@ -103,12 +103,9 @@ async def confirm_add(
             reply_markup=main_menu(),
         )
 
-    # Сразу проверим текущие результаты (если источник уже настроен).
+    # Сразу проверим текущие результаты.
     try:
         changes = await results.check_student(student)
-    except NotImplementedError:
-        await callback.message.answer(texts.PROVIDER_NOT_READY)
-        return
     except StudentNotFoundError:
         # Источник не нашёл ученика — почти всегда опечатка в данных.
         await callback.message.answer(

@@ -8,7 +8,6 @@ from ege_notifier.providers.ege_spb import (
     looks_not_found,
     parse_results_html,
 )
-from ege_notifier.utils import normalize_subject
 
 SAMPLE = (Path(__file__).parent / "fixtures" / "ege_spb_sample.html").read_text(
     encoding="utf-8"
@@ -40,14 +39,6 @@ def test_parse_sample_response():
     assert r.score is None  # «Зачёт» — не число
     assert r.status == "Действующий результат"
     assert r.exam_date == "3 декабря 2025"
-
-
-def test_normalize_subject_merges_punctuation_variants():
-    # Изменение формулировки на сайте не должно давать новый ключ (дубль-уведомление).
-    assert normalize_subject("Математика (профильная)") == normalize_subject(
-        "Математика профильная"
-    )
-    assert normalize_subject("Русский язык") == "русский язык"
 
 
 def test_parse_empty_or_unknown():

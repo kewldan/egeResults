@@ -43,6 +43,28 @@ async def list_students(
     await callback.answer()
 
 
+@router.callback_query(F.data.startswith("results:"))
+async def show_results(
+    callback: CallbackQuery, subscriptions: SubscriptionService
+) -> None:
+    student_id = _parse_id(callback.data or "")
+    if student_id is None:
+        await callback.answer("Некорректный идентификатор", show_alert=True)
+        return
+    # Авторизация: показываем сохранённые баллы (PII) только своим подписчикам,
+    # иначе подделанный callback дал бы доступ к результатам чужого ученика.
+    if callback.from_user.id not in await subscriptions.subscribers_for(student_id):
+        await callback.answer("Ученик не найден", show_alert=True)
+        return
+    student = await Student.get(student_id)
+    if student is None:
+        await callback.answer("Ученик не найден", show_alert=True)
+        return
+    await callback.answer()
+    if isinstance(callback.message, Message):
+        await callback.message.answer(texts.format_current_results(student))
+
+
 @router.callback_query(F.data.startswith("del:"))
 async def delete_student(
     callback: CallbackQuery, subscriptions: SubscriptionService
@@ -76,15 +98,21 @@ async def check_now(
         await callback.answer("Ученик не найден", show_alert=True)
         return
 
+    # Авторизация: запускать проверку и видеть результаты может только подписчик —
+    # иначе подделанный callback вытянул бы баллы чужого ученика инлайном. Этот же
+    # список нужен ниже для рассылки остальным подписчикам, поэтому берём один раз.
+    assert student.id is not None  # student получен через Student.get выше
+    subscriber_ids = await subscriptions.subscribers_for(student.id)
+    if callback.from_user.id not in subscriber_ids:
+        await callback.answer("Ученик не найден", show_alert=True)
+        return
+
     await callback.answer("Проверяю…")
     if not isinstance(callback.message, Message):
         return
 
     try:
         changes = await results.check_student(student)
-    except NotImplementedError:
-        await callback.message.answer(texts.PROVIDER_NOT_READY)
-        return
     except StudentNotFoundError:
         await callback.message.answer(
             texts.STUDENT_NOT_FOUND.format(label=student.label)
@@ -96,12 +124,7 @@ async def check_now(
         await callback.message.answer(text)  # инициатору — сразу, в текущий чат
         # check_student уже записал снимок в БД → плановая проверка эти изменения
         # больше не увидит; уведомляем остальных подписчиков, иначе они пропустят.
-        assert student.id is not None  # student получен через Student.get выше
-        others = [
-            tid
-            for tid in await subscriptions.subscribers_for(student.id)
-            if tid != callback.from_user.id
-        ]
+        others = [tid for tid in subscriber_ids if tid != callback.from_user.id]
         await notifier.broadcast(others, text)
     else:
         await callback.message.answer(texts.NO_CHANGES.format(label=student.label))

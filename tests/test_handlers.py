@@ -242,6 +242,52 @@ async def test_check_now_warns_when_student_not_found(monkeypatch):
     assert notifier.broadcasts == []
 
 
+async def test_check_now_rejects_non_subscriber(monkeypatch):
+    monkeypatch.setattr(my_students, "Message", FakeMessage)
+    student = _student()
+    _patch_student_get(monkeypatch, student)
+    subs = FakeSubscriptions(student, created=False, subscribers=[2, 3])
+    notifier = FakeNotifier()
+    message = FakeMessage()
+    callback = FakeCallback(message, user_id=1, data=f"check:{student.id}")
+
+    await my_students.check_now(callback, subs, FakeResults([_new_change()]), notifier)
+
+    # Не подписан → проверка не запускается, инлайн-ответа и рассылки нет.
+    assert message.answers == []
+    assert notifier.broadcasts == []
+    assert callback.answered == ["Ученик не найден"]
+
+
+async def test_show_results_sends_snapshot_to_subscriber(monkeypatch):
+    monkeypatch.setattr(my_students, "Message", FakeMessage)
+    student = _student(results=[_result_item()])
+    _patch_student_get(monkeypatch, student)
+    subs = FakeSubscriptions(student, created=False, subscribers=[1, 2])
+    message = FakeMessage()
+    callback = FakeCallback(message, user_id=1, data=f"results:{student.id}")
+
+    await my_students.show_results(callback, subs)
+
+    # Подписчику показали сохранённый снимок баллов (без проверки источника).
+    assert any("Русский язык" in a for a in message.answers)
+
+
+async def test_show_results_rejects_non_subscriber(monkeypatch):
+    monkeypatch.setattr(my_students, "Message", FakeMessage)
+    student = _student(results=[_result_item()])
+    _patch_student_get(monkeypatch, student)
+    subs = FakeSubscriptions(student, created=False, subscribers=[2, 3])
+    message = FakeMessage()
+    callback = FakeCallback(message, user_id=1, data=f"results:{student.id}")
+
+    await my_students.show_results(callback, subs)
+
+    # Не подписан → результаты чужого ученика не утекают.
+    assert message.answers == []
+    assert callback.answered == ["Ученик не найден"]
+
+
 async def test_check_now_no_changes_does_not_broadcast(monkeypatch):
     monkeypatch.setattr(my_students, "Message", FakeMessage)
     student = _student()

@@ -16,14 +16,7 @@ logger = logging.getLogger(__name__)
 
 async def run_check_cycle(results: ResultsService, notifier: Notifier) -> None:
     """Один цикл: проверить всех учеников и разослать уведомления подписчикам."""
-    try:
-        updates = await results.check_all()
-    except NotImplementedError:
-        logger.warning(
-            "Источник ege.spb.ru ещё не настроен — плановая проверка пропущена"
-        )
-        return
-
+    updates = await results.check_all()
     for upd in updates:
         text = texts.format_results_update(upd.student, upd.changes)
         await notifier.broadcast(upd.subscribers, text)

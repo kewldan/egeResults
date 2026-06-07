@@ -25,8 +25,9 @@ def confirm_keyboard() -> InlineKeyboardMarkup:
 def students_keyboard(students: list[Student]) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     for st in students:
-        kb.button(text=f"🔄 {st.last_name}", callback_data=f"check:{st.id}")
+        kb.button(text=f"📊 {st.last_name}", callback_data=f"results:{st.id}")
+        kb.button(text="🔄", callback_data=f"check:{st.id}")
         kb.button(text="🗑", callback_data=f"del:{st.id}")
     kb.button(text="⬅️ Меню", callback_data="menu")
-    kb.adjust(2)
+    kb.adjust(3)
     return kb.as_markup()

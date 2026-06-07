@@ -55,10 +55,7 @@ class ResultsService:
         return lock
 
     async def check_student(self, student: Student) -> list[ResultChange]:
-        """Проверяет одного ученика, обновляет его результаты в БД и возвращает изменения.
-
-        Поднимает ``NotImplementedError``, если выбранный источник ещё не настроен
-        (например, ege.spb.ru до подключения реального запроса)."""
+        """Проверяет одного ученика, обновляет его результаты в БД и возвращает изменения."""
         if student.id is None:
             return await self._check_student_locked(student)
         async with self._lock_for(student.id):
@@ -97,8 +94,6 @@ class ResultsService:
         query = self._subs.to_query(student)
         try:
             fetched = await self._provider.fetch(query)
-        except NotImplementedError:
-            raise
         except StudentNotFoundError:
             # Источник не нашёл ученика (вероятна опечатка в фамилии/паспорте).
             # Помечаем флагом и пробрасываем выше — хендлер подскажет проверить
