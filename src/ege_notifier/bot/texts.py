@@ -127,11 +127,6 @@ def students_overview(students: list[Student]) -> str:
         lines.append(
             f"• <b>{st.last_name}</b> ({st.passport_masked}) — {_student_status(st)}"
         )
-    lines.append("")
-    lines.append(
-        "📊 — текущие результаты, 🔄 — проверить сейчас, "
-        "🔗 — поделиться (без паспорта), 🗑 — удалить."
-    )
     return "\n".join(lines)
 
 
