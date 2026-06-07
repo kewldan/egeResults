@@ -6,7 +6,12 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
 from ege_notifier.bot import texts
-from ege_notifier.bot.keyboards import main_menu, results_link_keyboard
+from ege_notifier.bot.keyboards import (
+    main_menu,
+    main_reply_keyboard,
+    results_link_keyboard,
+)
+from ege_notifier.bot.ui import edit_message
 from ege_notifier.config import Settings
 from ege_notifier.providers.base import StudentNotFoundError
 from ege_notifier.services.notifier import Notifier
@@ -30,6 +35,17 @@ async def _register_user(
         await notifier.notify_admin(texts.admin_new_user(registered))
 
 
+async def _show_home(
+    message: Message, subscriptions: SubscriptionService, notifier: Notifier
+) -> None:
+    """Главный экран: приветствие + постоянная нижняя клавиатура и инлайн-действия."""
+    await _register_user(message, subscriptions, notifier)
+    # Постоянную нижнюю клавиатуру можно задать только при отправке сообщения,
+    # поэтому приветствие несёт её, а инлайн-действия идут отдельным сообщением.
+    await message.answer(texts.WELCOME, reply_markup=main_reply_keyboard())
+    await message.answer(texts.CHOOSE_ACTION, reply_markup=main_menu())
+
+
 # Deep-link /start <token> — приглашение по одноразовой ссылке. Регистрируем ВЫШЕ
 # обычного /start: CommandStart(deep_link=True) срабатывает только при наличии
 # полезной нагрузки, а CommandStart() поймал бы и её — побеждает первый по порядку.
@@ -51,11 +67,13 @@ async def cmd_start_shared(
 
     student = await subscriptions.redeem_share_token(command.args or "", user.id)
     if student is None:
-        await message.answer(texts.SHARE_INVALID, reply_markup=main_menu())
+        await message.answer(texts.SHARE_INVALID, reply_markup=main_reply_keyboard())
         return
 
+    # SHARE_REDEEMED заодно ставит постоянную нижнюю клавиатуру новому пользователю.
     await message.answer(
-        texts.SHARE_REDEEMED.format(label=student.label), reply_markup=main_menu()
+        texts.SHARE_REDEEMED.format(label=student.label),
+        reply_markup=main_reply_keyboard(),
     )
     # Уже известные баллы показываем сразу — diff ниже их не выдаст (они не новые).
     if student.results:
@@ -84,8 +102,29 @@ async def cmd_start(
     notifier: Notifier,
 ) -> None:
     await state.clear()
-    await _register_user(message, subscriptions, notifier)
-    await message.answer(texts.WELCOME, reply_markup=main_menu())
+    await _show_home(message, subscriptions, notifier)
+
+
+# Нижняя кнопка «Мои ученики» — алиас /start (показывает главный экран).
+@router.message(F.text == texts.BTN_MY_STUDENTS)
+async def btn_my_students(
+    message: Message,
+    state: FSMContext,
+    subscriptions: SubscriptionService,
+    notifier: Notifier,
+) -> None:
+    await state.clear()
+    await _show_home(message, subscriptions, notifier)
+
+
+@router.message(F.text == texts.BTN_SECURITY)
+async def btn_security(message: Message) -> None:
+    await message.answer(texts.SECURITY)
+
+
+@router.message(F.text == texts.BTN_ABOUT)
+async def btn_about(message: Message) -> None:
+    await message.answer(texts.ABOUT)
 
 
 @router.message(Command("help"))
@@ -106,7 +145,7 @@ async def cmd_cancel(message: Message, state: FSMContext) -> None:
 async def cb_cancel(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     if isinstance(callback.message, Message):
-        await callback.message.answer(texts.CANCELLED, reply_markup=main_menu())
+        await edit_message(callback.message, texts.CANCELLED, main_menu())
     await callback.answer()
 
 
@@ -114,5 +153,5 @@ async def cb_cancel(callback: CallbackQuery, state: FSMContext) -> None:
 async def cb_menu(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     if isinstance(callback.message, Message):
-        await callback.message.answer(texts.WELCOME, reply_markup=main_menu())
+        await edit_message(callback.message, texts.WELCOME, main_menu())
     await callback.answer()

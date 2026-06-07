@@ -11,6 +11,7 @@ from ege_notifier.bot.keyboards import (
     results_link_keyboard,
 )
 from ege_notifier.bot.states import AddStudent
+from ege_notifier.bot.ui import edit_message
 from ege_notifier.bot.validators import (
     validate_last_name,
     validate_number,
@@ -29,7 +30,8 @@ router = Router(name="add_student")
 async def start_add(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(AddStudent.last_name)
     if isinstance(callback.message, Message):
-        await callback.message.answer(texts.ASK_LAST_NAME)
+        # Правим экран меню в «введите фамилию» — без нового сообщения.
+        await edit_message(callback.message, texts.ASK_LAST_NAME)
     await callback.answer()
 
 
@@ -93,9 +95,12 @@ async def confirm_add(
     # Снимок берём до check_student — он перезапишет student.results.
     had_results = bool(student.results)
 
+    # Правим сообщение-подтверждение (с кнопками «Сохранить/Отмена») в итог.
     if created:
-        await callback.message.answer(
-            texts.SUBSCRIBED.format(label=student.label), reply_markup=main_menu()
+        await edit_message(
+            callback.message,
+            texts.SUBSCRIBED.format(label=student.label),
+            main_menu(),
         )
         # Ученик уже отслеживается кем-то и баллы в базе → diff будет пуст,
         # поэтому показываем новому подписчику текущий снимок результатов.
@@ -104,9 +109,10 @@ async def confirm_add(
                 callback.from_user.id, texts.format_current_results(student)
             )
     else:
-        await callback.message.answer(
+        await edit_message(
+            callback.message,
             texts.ALREADY_SUBSCRIBED.format(label=student.label),
-            reply_markup=main_menu(),
+            main_menu(),
         )
 
     # Сразу проверим текущие результаты.

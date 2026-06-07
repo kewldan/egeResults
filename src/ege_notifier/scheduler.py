@@ -24,8 +24,10 @@ async def run_check_cycle(
     for upd in updates:
         text = texts.format_results_update(upd.student, upd.changes)
         await notifier.broadcast(upd.subscribers, text, markup)
-        await notifier.notify_admin(texts.admin_new_results(upd.student, upd.changes))
     if updates:
+        # Одно сводное сообщение админу на цикл — не по одному на ученика, иначе
+        # пачка сообщений в один чат поймала бы TelegramRetryAfter.
+        await notifier.notify_admin(texts.admin_results_digest(updates))
         logger.info("Разослано уведомлений по %d ученик(ам)", len(updates))
 
 

@@ -7,11 +7,14 @@ from beanie import PydanticObjectId
 
 from ege_notifier.bot import texts
 from ege_notifier.bot.keyboards import (
+    back_to_list_keyboard,
     main_menu,
+    results_card_keyboard,
     results_link_keyboard,
     student_card_keyboard,
     students_keyboard,
 )
+from ege_notifier.bot.ui import edit_message
 from ege_notifier.config import Settings
 from ege_notifier.models import Student
 from ege_notifier.providers.base import StudentNotFoundError
@@ -34,10 +37,10 @@ async def _show_list(
 ) -> None:
     students = await subscriptions.list_subscriptions(telegram_id)
     if not students:
-        await message.answer(texts.NO_STUDENTS, reply_markup=main_menu())
+        await edit_message(message, texts.NO_STUDENTS, main_menu())
         return
-    await message.answer(
-        texts.students_overview(students), reply_markup=students_keyboard(students)
+    await edit_message(
+        message, texts.students_overview(students), students_keyboard(students)
     )
 
 
@@ -70,9 +73,10 @@ async def open_card(
         return
     await callback.answer()
     if isinstance(callback.message, Message):
-        await callback.message.answer(
+        await edit_message(
+            callback.message,
             texts.format_current_results(student),
-            reply_markup=student_card_keyboard(student_id),
+            student_card_keyboard(student_id),
         )
 
 
@@ -97,7 +101,11 @@ async def share_student(
         return
     link = await create_start_link(callback.bot, token)
     ttl = texts.human_duration(settings.share_link_ttl_seconds)
-    await callback.message.answer(texts.SHARE_LINK.format(link=link, ttl=ttl))
+    await edit_message(
+        callback.message,
+        texts.SHARE_LINK.format(link=link, ttl=ttl),
+        back_to_list_keyboard(),
+    )
 
 
 @router.callback_query(F.data.startswith("del:"))
@@ -108,12 +116,10 @@ async def delete_student(
     if student_id is None:
         await callback.answer("Некорректный идентификатор", show_alert=True)
         return
-    student = await Student.get(student_id)
-    label = student.label if student else "ученик"
     await subscriptions.unsubscribe(callback.from_user.id, student_id)
-    await callback.answer("Удалено")
+    await callback.answer("🗑 Удалено")
+    # Карточку правим обратно в список (без отдельного сообщения «Удалено»).
     if isinstance(callback.message, Message):
-        await callback.message.answer(texts.UNSUBSCRIBED.format(label=label))
         await _show_list(callback.message, subscriptions, callback.from_user.id)
 
 
@@ -147,26 +153,35 @@ async def check_now(
     if not isinstance(callback.message, Message):
         return
 
+    card = student_card_keyboard(student.id)
     try:
         changes = await results.check_student(student, manual=True)
     except StudentNotFoundError:
-        await callback.message.answer(
-            texts.STUDENT_NOT_FOUND.format(label=student.label)
+        await edit_message(
+            callback.message, texts.STUDENT_NOT_FOUND.format(label=student.label), card
         )
         return
     except RefreshThrottled as exc:
         # Источник опрашивали слишком недавно (общий лимит на ученика) — не дёргаем сайт.
-        await callback.message.answer(texts.refresh_throttled(exc.retry_after))
+        await edit_message(
+            callback.message, texts.refresh_throttled(exc.retry_after), card
+        )
         return
 
     if changes:
         text = texts.format_results_update(student, changes)
-        markup = results_link_keyboard(settings.results_site_url)
-        await callback.message.answer(text, reply_markup=markup)  # инициатору — сразу
+        # Инициатору правим карточку в результат (кнопки: сайт + назад к списку).
+        await edit_message(
+            callback.message, text, results_card_keyboard(settings.results_site_url)
+        )
         # check_student уже записал снимок в БД → плановая проверка эти изменения
         # больше не увидит; уведомляем остальных подписчиков, иначе они пропустят.
         others = [tid for tid in subscriber_ids if tid != callback.from_user.id]
-        await notifier.broadcast(others, text, markup)
+        await notifier.broadcast(
+            others, text, results_link_keyboard(settings.results_site_url)
+        )
         await notifier.notify_admin(texts.admin_new_results(student, changes))
     else:
-        await callback.message.answer(texts.NO_CHANGES.format(label=student.label))
+        await edit_message(
+            callback.message, texts.NO_CHANGES.format(label=student.label), card
+        )

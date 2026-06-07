@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from aiogram.types import InlineKeyboardMarkup
-from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.types import InlineKeyboardMarkup, ReplyKeyboardMarkup
+from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 
+from ege_notifier.bot import texts
 from ege_notifier.models import Student
 
 
@@ -11,6 +12,23 @@ def main_menu() -> InlineKeyboardMarkup:
     kb.button(text="➕ Добавить ученика", callback_data="add_student")
     kb.button(text="📋 Мои ученики", callback_data="my_students")
     kb.adjust(1)
+    return kb.as_markup()
+
+
+def main_reply_keyboard() -> ReplyKeyboardMarkup:
+    """Постоянная нижняя клавиатура быстрого доступа (живёт между сообщениями)."""
+    kb = ReplyKeyboardBuilder()
+    kb.button(text=texts.BTN_MY_STUDENTS)
+    kb.button(text=texts.BTN_SECURITY)
+    kb.button(text=texts.BTN_ABOUT)
+    kb.adjust(1, 2)
+    return kb.as_markup(resize_keyboard=True, is_persistent=True)
+
+
+def back_to_list_keyboard() -> InlineKeyboardMarkup:
+    """Одна кнопка «к списку» — для экранов без других действий (напр. ссылка)."""
+    kb = InlineKeyboardBuilder()
+    kb.button(text="⬅️ К списку", callback_data="my_students")
     return kb.as_markup()
 
 
@@ -51,4 +69,14 @@ def results_link_keyboard(url: str | None) -> InlineKeyboardMarkup | None:
         return None
     kb = InlineKeyboardBuilder()
     kb.button(text="🌐 Перейти на сайт", url=url)
+    return kb.as_markup()
+
+
+def results_card_keyboard(url: str | None) -> InlineKeyboardMarkup:
+    """Клавиатура под результатами в карточке инициатора: сайт + возврат к списку."""
+    kb = InlineKeyboardBuilder()
+    if url:
+        kb.button(text="🌐 Перейти на сайт", url=url)
+    kb.button(text="⬅️ К списку", callback_data="my_students")
+    kb.adjust(1)
     return kb.as_markup()

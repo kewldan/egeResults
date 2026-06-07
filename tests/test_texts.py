@@ -6,6 +6,7 @@ from typing import cast
 from ege_notifier.bot import texts
 from ege_notifier.models import Student
 from ege_notifier.services.diff import ChangeType, ResultChange
+from ege_notifier.services.results import StudentUpdate
 
 
 def _student(results: list) -> Student:
@@ -71,6 +72,18 @@ def test_admin_new_user_includes_id_and_username():
     )
     text = texts.admin_new_user(user)
     assert "42" in text and "@vasya" in text and "Вася Пупкин" in text
+
+
+def test_admin_results_digest_is_single_message_listing_students():
+    # Сводка за цикл — одно сообщение со списком (анти-флуд админа).
+    upd = cast(
+        StudentUpdate,
+        SimpleNamespace(student=_student([]), changes=[object()], subscribers=[1]),
+    )
+    text = texts.admin_results_digest([upd, upd, upd])
+    assert "3 ученик" in text  # счётчик
+    assert text.count("Иванов") == 3  # по строке на ученика
+    assert "…" not in text  # порога усечения не достигли
 
 
 def test_format_results_update_new_and_updated():

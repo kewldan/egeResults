@@ -27,9 +27,13 @@ from ege_notifier.services.results import RefreshThrottled
 class FakeMessage:
     def __init__(self):
         self.answers: list[str] = []
+        self.edits: list[str] = []
 
     async def answer(self, text, reply_markup=None):
         self.answers.append(text)
+
+    async def edit_text(self, text, reply_markup=None):
+        self.edits.append(text)
 
 
 class FakeCallback:
@@ -257,8 +261,8 @@ async def test_check_now_notifies_other_subscribers_and_replies_inline(monkeypat
         callback, subs, FakeResults([_new_change()]), notifier, SETTINGS
     )
 
-    # Инициатору (1) — сразу в чат; остальным подписчикам (2, 3) — рассылкой, без дубля себе.
-    assert any("Математика" in a for a in message.answers)
+    # Инициатору (1) — правим карточку на месте; остальным (2, 3) — рассылкой, без дубля себе.
+    assert any("Математика" in a for a in message.edits)
     assert len(notifier.broadcasts) == 1
     ids, _ = notifier.broadcasts[0]
     assert ids == [2, 3]
@@ -278,7 +282,7 @@ async def test_check_now_warns_when_student_not_found(monkeypatch):
         callback, subs, FakeResultsNotFound(), notifier, SETTINGS
     )
 
-    assert any("не нашлось" in a for a in message.answers)
+    assert any("не нашлось" in a for a in message.edits)
     assert notifier.broadcasts == []
 
 
@@ -295,8 +299,8 @@ async def test_check_now_rejects_non_subscriber(monkeypatch):
         callback, subs, FakeResults([_new_change()]), notifier, SETTINGS
     )
 
-    # Не подписан → проверка не запускается, инлайн-ответа и рассылки нет.
-    assert message.answers == []
+    # Не подписан → проверка не запускается, ни ответа/правки, ни рассылки.
+    assert message.answers == [] and message.edits == []
     assert notifier.broadcasts == []
     assert callback.answered == ["Ученик не найден"]
 
@@ -311,8 +315,8 @@ async def test_open_card_sends_snapshot_to_subscriber(monkeypatch):
 
     await my_students.open_card(callback, subs)
 
-    # Подписчику показали сохранённый снимок баллов (без проверки источника).
-    assert any("Русский язык" in a for a in message.answers)
+    # Подписчику показали сохранённый снимок баллов (правкой сообщения, без проверки источника).
+    assert any("Русский язык" in a for a in message.edits)
 
 
 async def test_open_card_rejects_non_subscriber(monkeypatch):
@@ -326,7 +330,7 @@ async def test_open_card_rejects_non_subscriber(monkeypatch):
     await my_students.open_card(callback, subs)
 
     # Не подписан → результаты чужого ученика не утекают.
-    assert message.answers == []
+    assert message.answers == [] and message.edits == []
     assert callback.answered == ["Ученик не найден"]
 
 
@@ -342,7 +346,7 @@ async def test_check_now_no_changes_does_not_broadcast(monkeypatch):
     await my_students.check_now(callback, subs, FakeResults([]), notifier, SETTINGS)
 
     assert notifier.broadcasts == []
-    assert any("Новых результатов" in a for a in message.answers)
+    assert any("Новых результатов" in a for a in message.edits)
 
 
 async def test_check_now_throttled_tells_user_to_wait(monkeypatch):
@@ -359,7 +363,7 @@ async def test_check_now_throttled_tells_user_to_wait(monkeypatch):
     )
 
     # Кулдаун: сайт не дёргаем, инициатору — «подождите», рассылки/админа нет.
-    assert any("Обновить" in a for a in message.answers)
+    assert any("Обновить" in a for a in message.edits)
     assert notifier.broadcasts == []
     assert notifier.admin == []
 
@@ -381,8 +385,8 @@ async def test_share_student_sends_link_to_subscriber(monkeypatch):
 
     await my_students.share_student(callback, subs, SETTINGS)
 
-    # Подписчику пришла ссылка-приглашение с токеном.
-    assert any("start=tok123" in a for a in message.answers)
+    # Подписчику пришла ссылка-приглашение с токеном (правкой сообщения).
+    assert any("start=tok123" in a for a in message.edits)
 
 
 async def test_share_student_rejects_non_subscriber(monkeypatch):
@@ -395,5 +399,5 @@ async def test_share_student_rejects_non_subscriber(monkeypatch):
     await my_students.share_student(callback, subs, SETTINGS)
 
     # Не подписан → ссылку не выдаём.
-    assert message.answers == []
+    assert message.answers == [] and message.edits == []
     assert callback.answered == ["Ученик не найден"]
