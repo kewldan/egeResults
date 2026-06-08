@@ -93,7 +93,7 @@ class ResultsService:
             # кулдаун сверяется с зафиксированным в БД временем (а не устаревшим).
             latest = await Student.get(student.id)
             if latest is None:
-                # Ученик удалён (последняя отписка) — не воскрешаем его.
+                # Записи ученика нет в БД (удалена вручную) — не воскрешаем её.
                 return []
             self._sync_snapshot(student, latest)
             if manual:
@@ -112,9 +112,9 @@ class ResultsService:
     async def _persist(self, student: Student) -> bool:
         """Сохраняет ученика, НЕ воскрешая удалённую запись.
 
-        Если последний подписчик отписался во время медленного fetch, ученик уже
-        удалён — ``save()`` (upsert) воскресил бы его вместе с PII. ``replace()``
-        не делает upsert и бросает ``DocumentNotFound`` — тогда просто молчим."""
+        Если запись ученика удалили из БД во время медленного fetch, ``save()``
+        (upsert) воскресил бы её вместе с PII. ``replace()`` не делает upsert и
+        бросает ``DocumentNotFound`` — тогда просто молчим."""
         if student.id is None:
             await student.insert()
             return True

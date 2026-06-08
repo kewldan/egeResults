@@ -43,6 +43,29 @@ def test_format_current_results_lists_all_known_results():
     assert "Русский язык" in text and "88" in text
     assert "Действующий результат" in text
     assert "Сочинение" in text and "Зачёт" in text
+    # Баллы спрятаны под спойлер.
+    assert "<tg-spoiler>88</tg-spoiler>" in text
+    assert "<tg-spoiler>Зачёт</tg-spoiler>" in text
+
+
+def test_format_current_results_escapes_html_from_source():
+    # subject_title/value/status приходят со стороннего сайта — спецсимволы HTML
+    # должны экранироваться, иначе разметка сломается (или будет инъекция).
+    student = _student(
+        [
+            SimpleNamespace(
+                subject="x",
+                subject_title="A<b> & C",
+                value="<i>1</i>",
+                score=None,
+                status="ok & <fin>",
+            )
+        ]
+    )
+    text = texts.format_current_results(student)
+    assert "A&lt;b&gt; &amp; C" in text
+    assert "&lt;i&gt;1&lt;/i&gt;" in text
+    assert "ok &amp; &lt;fin&gt;" in text
 
 
 def test_format_current_results_empty_is_not_header_only():
@@ -113,4 +136,6 @@ def test_format_results_update_new_and_updated():
     ]
     text = texts.format_results_update(_student([]), changes)
     assert "🆕" in text and "Русский язык" in text and "88" in text
-    assert "✏️" in text and "70 → 82" in text
+    # Баллы спрятаны под спойлер, поэтому «70 → 82» не идёт подряд.
+    assert "✏️" in text and "Математика" in text
+    assert "<tg-spoiler>70</tg-spoiler> → <tg-spoiler>82</tg-spoiler>" in text

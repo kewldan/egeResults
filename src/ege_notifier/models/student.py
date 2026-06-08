@@ -47,7 +47,3 @@ class Student(Document):
     class Settings:
         name = "students"
         indexes = [IndexModel([("identity_hash", ASCENDING)], unique=True)]
-
-    @property
-    def label(self) -> str:
-        return f"{self.last_name} · {self.passport_masked}"

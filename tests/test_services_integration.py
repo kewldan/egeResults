@@ -150,7 +150,7 @@ async def test_two_users_one_student_grouping():
         await client.close()
 
 
-async def test_unsubscribe_deletes_student_when_last_subscriber_leaves():
+async def test_unsubscribe_keeps_student_after_last_subscriber_leaves():
     client = await _fresh_db()
     try:
         subs, _ = _services()
@@ -159,7 +159,10 @@ async def test_unsubscribe_deletes_student_when_last_subscriber_leaves():
         await subs.unsubscribe(1, student.id)
         assert await Student.get(student.id) is not None  # ещё есть подписчик
         await subs.unsubscribe(2, student.id)
-        assert await Student.get(student.id) is None  # PII удалена
+        # Ученик НЕ удаляется, даже когда подписчиков не осталось (история ценна).
+        assert await Student.get(student.id) is not None
+        # Подписок при этом не осталось.
+        assert await Subscription.find(Subscription.student_id == student.id).count() == 0
     finally:
         await client.drop_database(TEST_DB)
         await client.close()

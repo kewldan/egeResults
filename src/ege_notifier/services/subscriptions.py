@@ -132,16 +132,10 @@ class SubscriptionService:
         if sub is None:
             return False
         await sub.delete()
-
-        # Если на ученика больше никто не подписан — удаляем его вместе с PII.
-        remaining = await Subscription.find(
-            Subscription.student_id == student_id
-        ).count()
-        if remaining == 0:
-            student = await Student.get(student_id)
-            if student is not None:
-                await student.delete()
-                logger.info("Ученик id=%s удалён (не осталось подписчиков)", student_id)
+        # Ученика НЕ удаляем, даже если подписчиков не осталось: сохраняем его и
+        # накопленные результаты (намеренно — история не теряется, можно снова
+        # подписаться напрямую или по ссылке-приглашению). Запись чистится только
+        # вручную.
         return True
 
     async def subscribers_for(self, student_id: PydanticObjectId) -> list[int]:
@@ -203,7 +197,7 @@ class SubscriptionService:
             return None
         student = await Student.get(doc["student_id"])
         if student is None:
-            return None  # ученик удалён (последний подписчик отписался)
+            return None  # ученика нет в БД (удалён вручную)
         assert student.id is not None  # получен через Student.get
         try:
             await Subscription(telegram_id=telegram_id, student_id=student.id).insert()

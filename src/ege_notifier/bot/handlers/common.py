@@ -62,7 +62,7 @@ async def cmd_start_shared(
 
     # SHARE_REDEEMED заодно ставит постоянную нижнюю клавиатуру новому пользователю.
     await message.answer(
-        texts.SHARE_REDEEMED.format(label=student.label),
+        texts.SHARE_REDEEMED.format(label=texts.student_label(student)),
         reply_markup=main_reply_keyboard(),
     )
     # Уже известные баллы показываем сразу — diff ниже их не выдаст (они не новые).

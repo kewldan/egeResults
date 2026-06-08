@@ -154,7 +154,9 @@ async def check_now(
         changes = await results.check_student(student, manual=True)
     except StudentNotFoundError:
         await edit_message(
-            callback.message, texts.STUDENT_NOT_FOUND.format(label=student.label), card
+            callback.message,
+            texts.STUDENT_NOT_FOUND.format(label=texts.student_label(student)),
+            card,
         )
         return
     except RefreshThrottled as exc:
@@ -179,5 +181,7 @@ async def check_now(
         await notifier.notify_admin(texts.admin_new_results(student, changes))
     else:
         await edit_message(
-            callback.message, texts.NO_CHANGES.format(label=student.label), card
+            callback.message,
+            texts.NO_CHANGES.format(label=texts.student_label(student)),
+            card,
         )

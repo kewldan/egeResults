@@ -99,7 +99,7 @@ async def confirm_add(
     if created:
         await edit_message(
             callback.message,
-            texts.SUBSCRIBED.format(label=student.label),
+            texts.SUBSCRIBED.format(label=texts.student_label(student)),
             back_to_list_keyboard(),
         )
         # Ученик уже отслеживается кем-то и баллы в базе → diff будет пуст,
@@ -111,7 +111,7 @@ async def confirm_add(
     else:
         await edit_message(
             callback.message,
-            texts.ALREADY_SUBSCRIBED.format(label=student.label),
+            texts.ALREADY_SUBSCRIBED.format(label=texts.student_label(student)),
             back_to_list_keyboard(),
         )
 
@@ -121,7 +121,7 @@ async def confirm_add(
     except StudentNotFoundError:
         # Источник не нашёл ученика — почти всегда опечатка в данных.
         await callback.message.answer(
-            texts.STUDENT_NOT_FOUND.format(label=student.label)
+            texts.STUDENT_NOT_FOUND.format(label=texts.student_label(student))
         )
         return
     except RefreshThrottled:

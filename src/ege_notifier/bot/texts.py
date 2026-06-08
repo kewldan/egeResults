@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from html import escape
 from typing import TYPE_CHECKING
 
 from ege_notifier.models import Student, User
@@ -8,6 +9,26 @@ from ege_notifier.services.diff import ChangeType, ResultChange
 
 if TYPE_CHECKING:
     from ege_notifier.services.results import StudentUpdate
+
+
+def _esc(value: str) -> str:
+    """Экранирует HTML-спецсимволы (``&``, ``<``, ``>``).
+
+    Все сообщения уходят с ``parse_mode=HTML``, а подставляемые значения приходят
+    извне: ``subject``/``status``/``value`` — со стороннего сайта, ``full_name`` —
+    из Telegram. Без экранирования любой ``<`` или ``&`` сломал бы разметку.
+    """
+    return escape(value, quote=False)
+
+
+def _spoiler(text: str) -> str:
+    """Прячет результат экзамена под спойлер Telegram (тап, чтобы раскрыть)."""
+    return f"<tg-spoiler>{text}</tg-spoiler>"
+
+
+def student_label(student: Student) -> str:
+    """Экранированная подпись ученика «Фамилия · ●●●● ●●●●NN» для HTML-шаблонов."""
+    return f"{_esc(student.last_name)} · {_esc(student.passport_masked)}"
 
 # Подписи кнопок постоянной нижней клавиатуры (см. keyboards.main_reply_keyboard).
 # По ним же хендлеры в common.py ловят нажатия (F.text == ...), поэтому держим
@@ -38,8 +59,8 @@ SECURITY = (
     "• Результаты ученика видят <b>только его подписчики</b>.\n"
     "• <b>Ссылки-приглашения</b> одноразовые: получатель видит результаты, но "
     "<b>не</b> паспортные данные.\n"
-    "• Когда ученика перестаёт отслеживать <b>последний</b> подписчик, его данные "
-    "<b>удаляются</b>.\n\n"
+    "• Убрать ученика из отслеживания можно в любой момент (🗑) — вы перестанете "
+    "получать о нём уведомления.\n\n"
     "Если хотите убрать ученика — откройте его карточку и нажмите 🗑."
 )
 
@@ -63,12 +84,18 @@ HELP = (
     "Команды: /start, /help, /cancel (отменить ввод)."
 )
 
-ASK_LAST_NAME = "✍️ Введите <b>фамилию</b> ученика (как в паспорте):"
+ASK_LAST_NAME = (
+    "✍️ Введите <b>только фамилию</b> ученика — без имени и отчества, "
+    "одним словом (как в паспорте):"
+)
 ASK_SERIES = "🔢 Введите <b>серию</b> паспорта (4 цифры):"
 ASK_NUMBER = "🔢 Введите <b>номер</b> паспорта (6 цифр):"
 
 BAD_LAST_NAME = (
-    "⚠️ Похоже на ошибку. Фамилия — это кириллица (можно с дефисом). Попробуйте ещё раз:"
+    "⚠️ Нужна <b>только фамилия</b> — без имени и отчества!\n"
+    "Одним словом, кириллицей, без пробелов. "
+    "Двойную фамилию пишите через дефис: «Петров-Водкин».\n"
+    "Попробуйте ещё раз:"
 )
 BAD_SERIES = "⚠️ Серия паспорта — ровно 4 цифры. Попробуйте ещё раз:"
 BAD_NUMBER = "⚠️ Номер паспорта — ровно 6 цифр. Попробуйте ещё раз:"
@@ -142,8 +169,8 @@ def refresh_throttled(retry_after: float) -> str:
 def confirm_text(data: dict) -> str:
     return (
         "Проверьте данные ученика:\n\n"
-        f"👤 Фамилия: <b>{data['last_name']}</b>\n"
-        f"🪪 Паспорт: <b>{data['passport_series']} {data['passport_number']}</b>\n\n"
+        f"👤 Фамилия: <b>{_esc(data['last_name'])}</b>\n"
+        f"🪪 Паспорт: <b>{_esc(data['passport_series'])} {_esc(data['passport_number'])}</b>\n\n"
         "Сохранить и подписаться на уведомления?"
     )
 
@@ -166,7 +193,8 @@ def students_overview(students: list[Student]) -> str:
     lines = ["📋 <b>Ваши ученики:</b>", ""]
     for st in students:
         lines.append(
-            f"• <b>{st.last_name}</b> ({st.passport_masked}) — {_student_status(st)}"
+            f"• <b>{_esc(st.last_name)}</b> ({_esc(st.passport_masked)}) — "
+            f"{_student_status(st)}"
         )
     lines.append("")
     lines.append("Нажмите на ученика — откроется карточка с результатами и действиями.")
@@ -189,15 +217,18 @@ def _display(value: str | None, score: int | None) -> str:
 def format_current_results(student: Student) -> str:
     """Снимок всех известных результатов ученика — для нового подписчика, который
     подписался на уже отслеживаемого ученика (diff будет пуст, но баллы есть)."""
-    header = f"📊 Текущие результаты ЕГЭ: <b>{student.last_name}</b> ({student.passport_masked})"
+    header = (
+        f"📊 Текущие результаты ЕГЭ: <b>{_esc(student.last_name)}</b> "
+        f"({_esc(student.passport_masked)})"
+    )
     if not student.results:
         # Защита от заголовка без строк, если вызвать с пустым снимком.
         return f"{header}\n\nРезультатов пока нет."
     lines = [header, ""]
     for item in student.results:
-        title = item.subject_title or item.subject
-        value = _display(item.value, item.score)
-        status = f" · {item.status}" if item.status else ""
+        title = _esc(item.subject_title or item.subject)
+        value = _spoiler(_esc(_display(item.value, item.score)))
+        status = f" · {_esc(item.status)}" if item.status else ""
         lines.append(f"• <b>{title}</b>: {value}{status}")
     return "\n".join(lines)
 
@@ -211,9 +242,9 @@ def admin_new_user(user: User) -> str:
     """Служебное уведомление админу о новом пользователе бота."""
     parts = [f"id <code>{user.telegram_id}</code>"]
     if user.username:
-        parts.append(f"@{user.username}")
+        parts.append(f"@{_esc(user.username)}")
     if user.full_name:
-        parts.append(user.full_name)
+        parts.append(_esc(user.full_name))
     return "🆕 <b>[админ]</b> Новый пользователь: " + ", ".join(parts)
 
 
@@ -229,7 +260,7 @@ def admin_results_digest(updates: list[StudentUpdate]) -> str:
     for upd in updates[:limit]:
         st = upd.student
         lines.append(
-            f"• <b>{st.last_name}</b> ({st.passport_masked}) — "
+            f"• <b>{_esc(st.last_name)}</b> ({_esc(st.passport_masked)}) — "
             f"изменений: {len(upd.changes)}"
         )
     if len(updates) > limit:
@@ -239,17 +270,18 @@ def admin_results_digest(updates: list[StudentUpdate]) -> str:
 
 def format_results_update(student: Student, changes: list[ResultChange]) -> str:
     lines = [
-        f"🔔 Обновление результатов ЕГЭ: <b>{student.last_name}</b> ({student.passport_masked})",
+        f"🔔 Обновление результатов ЕГЭ: <b>{_esc(student.last_name)}</b> "
+        f"({_esc(student.passport_masked)})",
         "",
     ]
     for c in changes:
-        title = c.subject_title or c.subject
+        title = _esc(c.subject_title or c.subject)
         if c.type == ChangeType.NEW:
-            value = _display(c.new_value, c.new_score)
-            status = f" · {c.new_status}" if c.new_status else ""
+            value = _spoiler(_esc(_display(c.new_value, c.new_score)))
+            status = f" · {_esc(c.new_status)}" if c.new_status else ""
             lines.append(f"🆕 <b>{title}</b>: {value}{status}")
         else:
-            old = _display(c.old_value, c.old_score)
-            new = _display(c.new_value, c.new_score)
+            old = _spoiler(_esc(_display(c.old_value, c.old_score)))
+            new = _spoiler(_esc(_display(c.new_value, c.new_score)))
             lines.append(f"✏️ <b>{title}</b>: {old} → {new}")
     return "\n".join(lines)
