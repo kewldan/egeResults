@@ -8,6 +8,7 @@ from ege_notifier.models import Student, User
 from ege_notifier.services.diff import ChangeType, ResultChange
 
 if TYPE_CHECKING:
+    from ege_notifier.providers.ege_spb_overview import PublishedSubject
     from ege_notifier.services.results import StudentUpdate
 
 
@@ -72,6 +73,12 @@ ABOUT = (
     "подписаться несколько человек.\n\n"
     "Проверки идут автоматически по расписанию; можно проверить и вручную из карточки "
     "ученика.\n\n"
+    "<b>Почему не «официальный» сайт checkege?</b>\n"
+    "Федеральный портал проверки результатов (checkege.rustest.ru) я не использую по "
+    "двум причинам: на нём стоит <b>капча</b> (автоматически её не пройти), и это "
+    "<b>федеральная</b> база — результаты из региона попадают туда <b>с задержкой</b>. "
+    "<b>ege.spb.ru</b> — официальный сайт по Санкт-Петербургу, баллы появляются на нём "
+    "раньше, поэтому слежу именно за ним.\n\n"
     "Автор: @kewldan"
 )
 
@@ -144,6 +151,14 @@ def _plural(n: int, one: str, few: str, many: str) -> str:
     if 2 <= n % 10 <= 4 and not (12 <= n % 100 <= 14):
         return few
     return many
+
+
+def _group_digits(n: int) -> str:
+    """Разбивает число на разряды: 41144 → «41 144».
+
+    Разделитель — неразрывный пробел (U+00A0), как на сайте: число не переносится
+    по строкам."""
+    return f"{n:,}".replace(",", " ")
 
 
 def human_duration(seconds: float) -> str:
@@ -266,6 +281,50 @@ def admin_results_digest(updates: list[StudentUpdate]) -> str:
     if len(updates) > limit:
         lines.append(f"… и ещё {len(updates) - limit}")
     return "\n".join(lines)
+
+
+def results_published_announcement(
+    subjects: list[PublishedSubject], delta: int | None, total: int | None
+) -> str:
+    """Анонс «результаты выложили» для тех, кто без паспортных данных.
+
+    Перечисляет новые предметы основного периода и (если счётчик распарсился)
+    оценивает, сколько человек в СПб сдавали — по приросту «результатов в базе».
+    """
+    one = len(subjects) == 1
+    names = "\n".join(f"• <b>{_esc(s.title)}</b>" for s in subjects)
+    lines = [
+        "🎓 <b>На ege.spb.ru опубликованы результаты ЕГЭ!</b>",
+        "",
+        f"Появились баллы по предмет{'у' if one else 'ам'} (основной период):",
+        names,
+    ]
+    if delta and delta > 0:
+        who = "этот предмет" if one else "эти предметы"
+        results_word = _plural(delta, "результат", "результата", "результатов")
+        lines += [
+            "",
+            f"📈 В базу добавилось <b>{_group_digits(delta)}</b> {results_word} — "
+            f"примерно столько человек в СПб сдавали {who}.",
+        ]
+    if total is not None:
+        lines += [f"Всего результатов в базе СПб: <b>{_group_digits(total)}</b>."]
+    lines += [
+        "",
+        "Хотите узнать свой балл? Добавьте ученика (фамилия + серия и номер "
+        "паспорта) — пришлю уведомление сразу, как появится результат. "
+        "Нажмите «📋 Мои ученики» → «➕ Добавить ученика».",
+    ]
+    return "\n".join(lines)
+
+
+def admin_subjects_published(
+    subjects: list[PublishedSubject], delta: int | None
+) -> str:
+    """Служебное уведомление админу о новых опубликованных предметах (#w2)."""
+    names = ", ".join(_esc(s.title) for s in subjects)
+    extra = f" (Δ {delta})" if delta is not None else ""
+    return f"🛎 <b>[админ]</b> Опубликованы предметы #w2: {names}{extra}"
 
 
 def format_results_update(student: Student, changes: list[ResultChange]) -> str:

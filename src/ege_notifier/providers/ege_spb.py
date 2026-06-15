@@ -3,9 +3,9 @@ from __future__ import annotations
 import logging
 from urllib.parse import urlencode
 
-import httpx
 from bs4 import BeautifulSoup
 
+from ege_notifier.providers._http import ENCODING, build_client, decode_response
 from ege_notifier.providers.base import (
     FetchedResult,
     StudentNotFoundError,
@@ -15,16 +15,11 @@ from ege_notifier.utils import normalize_subject
 
 logger = logging.getLogger(__name__)
 
-# Сайт ege.spb.ru работает в кодировке windows-1251: тело запроса нужно кодировать
-# в cp1251, а ответ — декодировать из cp1251.
-ENCODING = "windows-1251"
+# ENCODING (windows-1251) и httpx-клиент — общие для всех запросов к ege.spb.ru,
+# живут в providers/_http.py (см. fetch ниже и providers/ege_spb_overview.py).
+
 # Значение submit-кнопки формы (как в реальном запросе).
 SUBMIT_VALUE = "Показать результаты"
-
-_USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-)
 
 
 def build_form_body(query: StudentQuery) -> str:
@@ -124,15 +119,9 @@ class EgeSpbProvider:
     ):
         self._url = f"{base_url.rstrip('/')}/result/index.php"
         self._params = {"mode": mode, "wave": wave}
-        self._client = httpx.AsyncClient(
-            timeout=timeout,
-            headers={
-                "User-Agent": _USER_AGENT,
-                "Content-Type": "application/x-www-form-urlencoded",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "Accept-Language": "ru,en;q=0.9",
-            },
-            follow_redirects=True,
+        self._client = build_client(
+            timeout,
+            {"Content-Type": "application/x-www-form-urlencoded"},
         )
 
     async def fetch(self, query: StudentQuery) -> list[FetchedResult]:
@@ -145,7 +134,7 @@ class EgeSpbProvider:
             headers={"Referer": referer},
         )
         response.raise_for_status()
-        html = response.content.decode(ENCODING, errors="replace")
+        html = decode_response(response)
         if looks_not_found(html):
             raise StudentNotFoundError(
                 "ege.spb.ru вернул форму поиска — ученик не найден по фамилии и паспорту"

@@ -142,6 +142,22 @@ class SubscriptionService:
         subs = await Subscription.find(Subscription.student_id == student_id).to_list()
         return [s.telegram_id for s in subs]
 
+    async def passportless_user_ids(self) -> list[int]:
+        """Активные пользователи, не отслеживающие ни одного ученика.
+
+        Те, кто зашёл в бота, но не вводил паспортные данные (нет ни одной подписки).
+        Им шлём анонс «результаты выложили» — подписчики и так получают свои баллы.
+
+        Тянем только ``telegram_id`` (``distinct``), не материализуя документы целиком:
+        иначе на каждый опрос монитора грузили бы все подписки и всех пользователей."""
+        subscribed = set(
+            await Subscription.get_pymongo_collection().distinct("telegram_id")
+        )
+        active = await User.get_pymongo_collection().distinct(
+            "telegram_id", {"is_active": True}
+        )
+        return [tid for tid in active if tid not in subscribed]
+
     async def subscribers_by_student(self) -> dict[PydanticObjectId, list[int]]:
         """Все подписки одним запросом, сгруппированные по ученику.
 
