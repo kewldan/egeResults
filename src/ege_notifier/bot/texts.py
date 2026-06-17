@@ -350,8 +350,14 @@ def admin_subjects_overview(subjects: list[SubjectCount]) -> str:
     return "\n".join(lines)
 
 
-def admin_top_empty(subject: str) -> str:
-    """Запрошенного предмета нет ни у одного ученика."""
+def admin_top_empty(subject: str, notes_filter: str | None = None) -> str:
+    """Запрошенного предмета (с учётом фильтра по заметке) нет ни у одного ученика."""
+    if notes_filter:
+        return (
+            f"🤷 По предмету «<b>{_esc(subject)}</b>» с заметкой, содержащей "
+            f"«<b>{_esc(notes_filter)}</b>», нет ни одного ученика с результатом. "
+            "Уберите фильтр или измените его — <code>/top предмет | заметка</code>."
+        )
     return (
         f"🤷 По предмету «<b>{_esc(subject)}</b>» пока нет результатов ни у одного "
         "ученика. Посмотреть доступные предметы — <code>/top</code> без аргумента."
@@ -365,15 +371,20 @@ def _rank_line(entry: RankEntry, display: str) -> str:
     return f"<b>{_esc(entry.last_name)}</b> (…{_esc(tail)}){note} — {display}"
 
 
-def admin_subject_ranking(title: str, entries: list[RankEntry]) -> str:
+def admin_subject_ranking(
+    title: str, entries: list[RankEntry], notes_filter: str | None = None
+) -> str:
     """Топ учеников по предмету: числовые баллы по убыванию + средний балл.
 
     Это админ-инструмент: баллы показываем открыто (без спойлера), чтобы список
-    читался сразу. Результаты без числового балла («Зачёт») выносятся в конец."""
+    читался сразу. Результаты без числового балла («Зачёт») выносятся в конец.
+    ``notes_filter`` (если задан) показываем в шапке — топ сужен по заметке."""
     numeric = [e for e in entries if e.score is not None]
     other = [e for e in entries if e.score is None]
 
     header = f"🏆 <b>Топ по предмету: {_esc(title)}</b>"
+    if notes_filter:
+        header += f"\n🔎 фильтр по заметке: «<b>{_esc(notes_filter)}</b>»"
     summary = f"Учеников с результатом: <b>{len(entries)}</b>"
     if numeric:
         avg = sum(e.score or 0 for e in numeric) / len(numeric)

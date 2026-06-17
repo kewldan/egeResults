@@ -36,7 +36,9 @@ def _result_for(student: Student, subject_key: str):
     return None
 
 
-def rank_by_subject(students: list[Student], subject_key: str) -> list[RankEntry]:
+def rank_by_subject(
+    students: list[Student], subject_key: str, notes_query: str | None = None
+) -> list[RankEntry]:
     """Сортирует учеников по баллу за предмет (по убыванию).
 
     Чистая функция (без I/O): принимает уже загруженных учеников и нормализованный
@@ -44,9 +46,16 @@ def rank_by_subject(students: list[Student], subject_key: str) -> list[RankEntry
     поэтому синонимы («Информатика и ИКТ» / «Информатика») и формулировки с разной
     пунктуацией находят один и тот же предмет. Числовые баллы идут первыми по
     убыванию; результаты без балла («Зачёт») — в конце, по алфавиту фамилий.
+
+    ``notes_query`` (если задан) оставляет только учеников, в чьей заметке
+    (``Student.notes``) встречается подстрока — без учёта регистра. Удобно сузить
+    топ до конкретной группы/потока, помеченной в заметке.
     """
+    needle = (notes_query or "").strip().casefold()
     entries: list[RankEntry] = []
     for st in students:
+        if needle and needle not in (st.notes or "").casefold():
+            continue
         item = _result_for(st, subject_key)
         if item is None:
             continue

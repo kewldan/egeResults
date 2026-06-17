@@ -74,6 +74,33 @@ def test_rank_puts_non_numeric_results_last_alphabetically():
     assert entries[0].score == 90 and entries[1].score is None
 
 
+def test_rank_filters_by_notes_substring_case_insensitive():
+    students = [
+        _student("Иванов", [_item("русский язык", score=92)], notes="Группа А"),
+        _student("Петров", [_item("русский язык", score=88)], notes="группа б"),
+        _student("Сидоров", [_item("русский язык", score=70)], notes="ГРУППА А, поток 1"),
+    ]
+    # Подстрока без учёта регистра — оба «группа А» проходят, «группа б» отсеивается.
+    entries = rank_by_subject(students, "русский язык", "группа а")
+    assert [e.last_name for e in entries] == ["Иванов", "Сидоров"]
+
+
+def test_rank_notes_filter_blank_keeps_everyone():
+    students = [
+        _student("Иванов", [_item("русский язык", score=92)], notes="Группа А"),
+        _student("Петров", [_item("русский язык", score=88)], notes=""),
+    ]
+    # Пустой/пробельный фильтр = фильтра нет, поведение прежнее.
+    assert [e.last_name for e in rank_by_subject(students, "русский язык", "  ")] == [
+        "Иванов",
+        "Петров",
+    ]
+    assert [e.last_name for e in rank_by_subject(students, "русский язык")] == [
+        "Иванов",
+        "Петров",
+    ]
+
+
 def test_average_score_ignores_non_numeric():
     students = [
         _student("Иванов", [_item("математика базовая", score=60)]),

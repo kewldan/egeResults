@@ -48,7 +48,12 @@ router.message.filter(IsAdmin())
 
 @router.message(Command("top"))
 async def cmd_top(message: Message, command: CommandObject) -> None:
-    """Топ по предмету. Без аргумента — список доступных предметов с числом учеников."""
+    """Топ по предмету. Без аргумента — список доступных предметов с числом учеников.
+
+    Необязательный фильтр по заметке (``Student.notes``) — после ``|``:
+    ``/top русский | группа А`` оставит в топе только учеников, в чьей заметке
+    встречается «группа А» (подстрока, без учёта регистра).
+    """
     # Админ-команда, набор учеников — это отслеживаемый «класс» (десятки записей),
     # поэтому грузим всех одним запросом и считаем в памяти (без N+1).
     students = await Student.find_all().to_list()
@@ -58,13 +63,19 @@ async def cmd_top(message: Message, command: CommandObject) -> None:
         await message.answer(texts.admin_subjects_overview(available_subjects(students)))
         return
 
-    entries = rank_by_subject(students, normalize_subject(arg))
+    # «предмет | фильтр по заметке» — предмет может быть из нескольких слов, поэтому
+    # разделитель явный. Без ``|`` фильтра нет, поведение прежнее.
+    subject_arg, _, notes_arg = arg.partition("|")
+    subject_arg = subject_arg.strip()
+    notes_arg = notes_arg.strip()
+
+    entries = rank_by_subject(students, normalize_subject(subject_arg), notes_arg)
     if not entries:
-        await message.answer(texts.admin_top_empty(arg))
+        await message.answer(texts.admin_top_empty(subject_arg, notes_arg or None))
         return
     # Заголовок — как предмет называет сайт (subject_title), иначе ввод администратора.
-    title = entries[0].subject_title or arg
-    await message.answer(texts.admin_subject_ranking(title, entries))
+    title = entries[0].subject_title or subject_arg
+    await message.answer(texts.admin_subject_ranking(title, entries, notes_arg or None))
 
 
 # Защита от параллельных ручных запусков: плановая и ручная проверки безопасны
