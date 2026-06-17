@@ -1,9 +1,10 @@
 """Команды администратора: топ по предмету и ручной запуск проверки результатов.
 
-Доступ ограничен фильтром ``IsAdmin`` на уровне роутера (см. ``settings.admin_id``):
+Доступ ограничен фильтром ``IsAdmin`` на уровне роутера (см. ``settings.admin_ids``):
 сообщения не-админов сюда не попадают и проваливаются в следующие роутеры, как если
-бы этих команд не существовало. Роутер включается в ``factory`` ВЫШЕ ``add_student``,
-чтобы ``/top`` и ``/check`` ловились по Command-фильтру даже во время FSM-добавления.
+бы этих команд не существовало. Админов может быть несколько (``ADMIN_ID`` — список
+ID через запятую). Роутер включается в ``factory`` ВЫШЕ ``add_student``, чтобы ``/top``
+и ``/check`` ловились по Command-фильтру даже во время FSM-добавления.
 
 ``/top``  — топ учеников по предмету (или список доступных предметов без аргумента).
 ``/check`` — запускает плановую проверку всех учеников в фоне (как цикл по расписанию).
@@ -33,13 +34,12 @@ router = Router(name="admin")
 
 
 class IsAdmin(BaseFilter):
-    """Пропускает только сообщения от ``settings.admin_id`` (DI отдаёт ``settings``)."""
+    """Пропускает только сообщения от админов (``settings.admin_ids``; DI отдаёт ``settings``)."""
 
     async def __call__(self, message: Message, settings: Settings) -> bool:
         return (
-            settings.admin_id is not None
-            and message.from_user is not None
-            and message.from_user.id == settings.admin_id
+            message.from_user is not None
+            and message.from_user.id in settings.admin_ids
         )
 
 

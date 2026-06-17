@@ -21,13 +21,16 @@ class Notifier:
     """Отправка уведомлений пользователям через Telegram с обработкой ошибок."""
 
     def __init__(
-        self, bot: Bot, broadcast_delay: float = 0.05, admin_id: int | None = None
+        self,
+        bot: Bot,
+        broadcast_delay: float = 0.05,
+        admin_ids: Iterable[int] | None = None,
     ):
         self._bot = bot
         # Пауза между сообщениями веерной рассылки (анти-rate-limit Telegram).
         self._broadcast_delay = broadcast_delay
-        # Кому слать служебные уведомления (новые результаты/пользователи); None — выкл.
-        self._admin_id = admin_id
+        # Кому слать служебные уведомления (новые результаты/пользователи); [] — выкл.
+        self._admin_ids = list(admin_ids or [])
 
     async def send(
         self,
@@ -68,10 +71,16 @@ class Notifier:
         return sent
 
     async def notify_admin(self, text: str) -> bool:
-        """Шлёт служебное уведомление админу (если ADMIN_ID задан)."""
-        if self._admin_id is None:
-            return False
-        return await self.send(self._admin_id, text)
+        """Шлёт служебное уведомление всем админам (если заданы).
+
+        Возвращает ``True``, если доставлено хотя бы одному. Админов немного и чаты
+        у них разные, так что отдельный троттлинг тут не нужен (лимит ~1 сообщение/с
+        — на чат)."""
+        sent_any = False
+        for admin_id in self._admin_ids:
+            if await self.send(admin_id, text):
+                sent_any = True
+        return sent_any
 
     async def _deactivate(self, telegram_id: int) -> None:
         user = await User.find_one(User.telegram_id == telegram_id)

@@ -55,7 +55,7 @@ async def main() -> None:
     provider = build_provider(settings)
     subscriptions = SubscriptionService(settings, cipher)
     bot = build_bot(settings.bot_token)
-    notifier = Notifier(bot, settings.broadcast_delay, settings.admin_id)
+    notifier = Notifier(bot, settings.broadcast_delay, settings.admin_ids)
     results = ResultsService(settings, provider, subscriptions)
 
     # Монитор страницы-обзора — основной триггер проверок (см. scheduler).

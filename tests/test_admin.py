@@ -54,7 +54,7 @@ class FakeResults:
 
 
 SETTINGS = SimpleNamespace(
-    admin_id=42,
+    admin_ids=[42],
     results_site_url="https://www.ege.spb.ru/result/index.php?mode=ege2026&wave=1",
 )
 
@@ -96,8 +96,15 @@ async def test_is_admin_allows_only_configured_admin():
 
 async def test_is_admin_false_when_admin_unset():
     flt = admin.IsAdmin()
-    no_admin = SimpleNamespace(admin_id=None)
+    no_admin = SimpleNamespace(admin_ids=[])
     assert await flt(FakeMessage(user_id=42), no_admin) is False
+
+
+async def test_is_admin_allows_any_of_several():
+    flt = admin.IsAdmin()
+    many = SimpleNamespace(admin_ids=[42, 1268132424])
+    assert await flt(FakeMessage(user_id=1268132424), many) is True
+    assert await flt(FakeMessage(user_id=99), many) is False
 
 
 # --- /top ---------------------------------------------------------------------

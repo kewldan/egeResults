@@ -58,9 +58,16 @@ async def test_send_retries_once_on_rate_limit():
 
 async def test_notify_admin_sends_when_configured():
     bot = FakeBot()
-    notifier = Notifier(cast(Bot, bot), broadcast_delay=0, admin_id=777)
+    notifier = Notifier(cast(Bot, bot), broadcast_delay=0, admin_ids=[777])
     assert await notifier.notify_admin("ping") is True
     assert bot.sent == [(777, "ping")]
+
+
+async def test_notify_admin_sends_to_all_admins():
+    bot = FakeBot()
+    notifier = Notifier(cast(Bot, bot), broadcast_delay=0, admin_ids=[777, 888])
+    assert await notifier.notify_admin("ping") is True
+    assert bot.sent == [(777, "ping"), (888, "ping")]
 
 
 async def test_notify_admin_noop_without_admin_id():

@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import re
-from typing import Literal
+from typing import Annotated, Literal
 from urllib.parse import urlencode
 
-from pydantic import Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import AliasChoices, Field, field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -24,8 +24,27 @@ class Settings(BaseSettings):
     # --- Telegram ---
     bot_token: str = Field(..., description="Токен бота от @BotFather")
     # Кому слать служебные уведомления (новые результаты у любого ученика, новые
-    # пользователи). Пусто => админ-уведомления отключены.
-    admin_id: int | None = 787751346
+    # пользователи) и кого пускать в админ-команды (/top, /check). Можно несколько
+    # ID — через запятую в ADMIN_ID (или ADMIN_IDS). Пусто => админ-функции выключены.
+    admin_ids: Annotated[list[int], NoDecode] = Field(
+        default=[787751346, 1268132424],
+        validation_alias=AliasChoices("admin_ids", "admin_id"),
+    )
+
+    @field_validator("admin_ids", mode="before")
+    @classmethod
+    def _parse_admin_ids(cls, value: object) -> object:
+        """Принимает список, одиночный int или строку с ID через запятую/пробел.
+
+        ``NoDecode`` отключает попытку pydantic-settings распарсить env-значение как
+        JSON, поэтому строка вида ``787751346,1268132424`` доходит сюда сырой."""
+        if value is None or value == "":
+            return []
+        if isinstance(value, int):
+            return [value]
+        if isinstance(value, str):
+            return [int(part) for part in re.split(r"[,\s]+", value.strip()) if part]
+        return value
 
     # --- MongoDB ---
     mongo_uri: str = "mongodb://localhost:27017"
