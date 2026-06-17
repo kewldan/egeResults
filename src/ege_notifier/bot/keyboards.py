@@ -35,12 +35,21 @@ def confirm_keyboard() -> InlineKeyboardMarkup:
 def students_keyboard(students: list[Student]) -> InlineKeyboardMarkup:
     """Список учеников: кнопка на каждого (открывает карточку) + «добавить ученика».
 
-    Работает и для пустого списка — тогда остаётся только кнопка добавления."""
+    При большом списке (> 8 учеников) кнопки учеников раскладываются в 2 колонки,
+    чтобы список не растягивался на весь экран. Кнопка «добавить» всегда остаётся
+    на всю ширину отдельной строкой. Работает и для пустого списка."""
     kb = InlineKeyboardBuilder()
     for st in students:
         kb.button(text=f"👤 {st.last_name}", callback_data=f"student:{st.id}")
     kb.button(text="➕ Добавить ученика", callback_data="add_student")
-    kb.adjust(1)
+
+    cols = 2 if len(students) > 8 else 1
+    # Явно задаём размер КАЖДОЙ строки (а не полагаемся на repeat в adjust):
+    # полные строки по `cols`, при нечётном числе — остаток отдельной строкой,
+    # и «добавить» всегда одной кнопкой в строке.
+    full, rem = divmod(len(students), cols)
+    sizes = [cols] * full + ([rem] if rem else []) + [1]
+    kb.adjust(*sizes)
     return kb.as_markup()
 
 

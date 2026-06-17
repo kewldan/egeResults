@@ -6,7 +6,7 @@ from aiogram.enums import ParseMode
 from aiogram.fsm.storage.base import BaseStorage
 from aiogram.fsm.storage.memory import MemoryStorage
 
-from ege_notifier.bot.handlers import add_student, common, my_students
+from ege_notifier.bot.handlers import add_student, admin, common, my_students
 from ege_notifier.config import Settings
 from ege_notifier.services.notifier import Notifier
 from ege_notifier.services.results import ResultsService
@@ -44,6 +44,9 @@ def build_dispatcher(
     dp["settings"] = settings
 
     dp.include_router(common.router)
+    # admin — выше add_student, чтобы /top и /check ловились по Command-фильтру даже
+    # во время FSM добавления (иначе их перехватили бы state-хендлеры add_student).
+    dp.include_router(admin.router)
     dp.include_router(add_student.router)
     dp.include_router(my_students.router)
     return dp

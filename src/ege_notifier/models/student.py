@@ -27,6 +27,8 @@ class Student(Document):
     """Ученик, чьи результаты отслеживаются. Уникален по паспорту (identity_hash)."""
 
     last_name: str
+    # Свободная заметка для администратора (напр. источник/группа ученика). Не PII.
+    notes: str = ""
     # Паспортные данные хранятся в зашифрованном виде (см. security.Cipher).
     passport_series_enc: str
     passport_number_enc: str

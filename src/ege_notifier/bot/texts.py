@@ -9,6 +9,7 @@ from ege_notifier.services.diff import ChangeType, ResultChange
 
 if TYPE_CHECKING:
     from ege_notifier.providers.ege_spb_overview import PublishedSubject
+    from ege_notifier.services.ranking import RankEntry, SubjectCount
     from ege_notifier.services.results import StudentUpdate
 
 
@@ -325,6 +326,93 @@ def admin_subjects_published(
     names = ", ".join(_esc(s.title) for s in subjects)
     extra = f" (Δ {delta})" if delta is not None else ""
     return f"🛎 <b>[админ]</b> Опубликованы предметы #w2: {names}{extra}"
+
+
+# --- админ-команды (топ по предмету, ручной запуск проверки) ------------------
+
+ADMIN_TOP_NO_DATA = (
+    "📊 Пока нет ни одного результата у отслеживаемых учеников — топ составить не из чего."
+)
+
+
+def admin_subjects_overview(subjects: list[SubjectCount]) -> str:
+    """Подсказка для /top без аргумента: какие предметы доступны и сколько учеников."""
+    if not subjects:
+        return ADMIN_TOP_NO_DATA
+    lines = [
+        "📊 <b>Доступные предметы</b> — укажите один: <code>/top предмет</code>",
+        "",
+    ]
+    for s in subjects:
+        word = _plural(s.count, "ученик", "ученика", "учеников")
+        lines.append(f"• <b>{_esc(s.title)}</b> — {s.count} {word}")
+    lines += ["", "Например: <code>/top математика профильная</code>"]
+    return "\n".join(lines)
+
+
+def admin_top_empty(subject: str) -> str:
+    """Запрошенного предмета нет ни у одного ученика."""
+    return (
+        f"🤷 По предмету «<b>{_esc(subject)}</b>» пока нет результатов ни у одного "
+        "ученика. Посмотреть доступные предметы — <code>/top</code> без аргумента."
+    )
+
+
+def _rank_line(entry: RankEntry, display: str) -> str:
+    """Строка топа: фамилия + 2 цифры паспорта (на случай однофамильцев) + балл."""
+    tail = entry.passport_masked[-2:]
+    note = f" <i>{_esc(entry.notes)}</i>" if entry.notes else ""
+    return f"<b>{_esc(entry.last_name)}</b> (…{_esc(tail)}){note} — {display}"
+
+
+def admin_subject_ranking(title: str, entries: list[RankEntry]) -> str:
+    """Топ учеников по предмету: числовые баллы по убыванию + средний балл.
+
+    Это админ-инструмент: баллы показываем открыто (без спойлера), чтобы список
+    читался сразу. Результаты без числового балла («Зачёт») выносятся в конец."""
+    numeric = [e for e in entries if e.score is not None]
+    other = [e for e in entries if e.score is None]
+
+    header = f"🏆 <b>Топ по предмету: {_esc(title)}</b>"
+    summary = f"Учеников с результатом: <b>{len(entries)}</b>"
+    if numeric:
+        avg = sum(e.score or 0 for e in numeric) / len(numeric)
+        best = numeric[0].score
+        worst = numeric[-1].score
+        summary += (
+            f" · средний балл: <b>{avg:.1f}</b> · "
+            f"макс/мин: <b>{best}</b>/<b>{worst}</b>"
+        )
+    lines = [header, summary, ""]
+
+    limit = 100  # защитный предел на длину сообщения Telegram (4096 символов)
+    for i, e in enumerate(numeric[:limit], 1):
+        lines.append(f"{i}. {_rank_line(e, f'<b>{e.score}</b>')}")
+    if len(numeric) > limit:
+        lines.append(f"… и ещё {len(numeric) - limit}")
+
+    if other:
+        lines += ["", "Без числового балла:"]
+        for e in other[:limit]:
+            lines.append(f"• {_rank_line(e, _esc(_display(e.value, e.score)))}")
+    return "\n".join(lines)
+
+
+ADMIN_CHECK_STARTED = (
+    "🚀 Запускаю проверку личных результатов всех отслеживаемых учеников…\n"
+    "Это может занять некоторое время — пришлю сводку, когда закончу."
+)
+ADMIN_CHECK_ALREADY_RUNNING = (
+    "⏳ Проверка уже идёт. Дождитесь её завершения — пришлю сводку."
+)
+
+
+def admin_check_done(updated: int) -> str:
+    """Сводка администратору по завершении ручного запуска проверки."""
+    if updated == 0:
+        return "✅ Проверка завершена. Новых результатов ни у кого не появилось."
+    word = _plural(updated, "ученика", "учеников", "учеников")
+    return f"✅ Проверка завершена. Новые результаты у <b>{updated}</b> {word}."
 
 
 def format_results_update(student: Student, changes: list[ResultChange]) -> str:
