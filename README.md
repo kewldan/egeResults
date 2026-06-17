@@ -36,9 +36,11 @@ src/ege_notifier/
       subscriptions.py — регистрация пользователей и подписки
       results.py     — проверка результатов и формирование изменений
       notifier.py    — рассылка уведомлений в Telegram
+      cards.py       — клиент рендерера карточек (PNG с баллами «для сторис»)
   bot/               — aiogram 3: фабрика, FSM, хендлеры, тексты, клавиатуры
   scheduler.py       — APScheduler: периодический запуск проверки
   __main__.py        — точка входа (бот + планировщик)
+render-takumi/       — отдельный сервис-рендерер карточек (Bun + takumi-js)
 tests/               — офлайн-тесты (diff/merge, парсинг, хендлеры) + интеграционные
                        (нужна Mongo; иначе пропускаются)
 fixtures/results.json — пример данных для mock-источника
@@ -109,12 +111,27 @@ uv run pytest
 
 ```bash
 cp .env.example .env          # заполнить BOT_TOKEN, ENCRYPTION_KEY, IDENTITY_SECRET
-docker compose up -d --build  # поднимет mongo + redis + bot
+docker compose up -d --build  # поднимет redis + card-renderer + bot
 docker compose logs -f bot
 ```
 
 `compose.yaml` переопределяет `MONGO_URI`/`REDIS_URL` на имена сервисов сети
 compose, поэтому в `.env` их менять не нужно.
+
+## Картинка с результатами (для сторис)
+
+В карточке ученика есть кнопка **«🖼 Картинка для сторис»** — бот генерирует
+красивый PNG с баллами (сумма + список предметов), который удобно выложить в
+сторис. Рендерит отдельный сервис [`render-takumi/`](render-takumi/) на **Bun +
+takumi-js**; бот ходит к нему по HTTP (`POST /cards/summary.png`).
+
+- В Docker сервис `card-renderer` поднимается автоматически (`docker compose up`),
+  бот находит его по `CARD_RENDERER_URL=http://card-renderer:3000`.
+- Локально без Docker: `cd render-takumi && bun install && bun run serve`
+  (слушает `http://localhost:3000`), затем запустить бота как обычно.
+- Выключить фичу целиком: `CARD_RENDERER_ENABLED=false` (кнопка не показывается).
+
+Карточка содержит только фамилию и баллы — **паспортные данные в неё не попадают**.
 
 ## Хранилище состояний (FSM)
 

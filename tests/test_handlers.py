@@ -15,8 +15,10 @@ from types import SimpleNamespace
 
 from beanie import PydanticObjectId
 
+from ege_notifier.bot import texts
 from ege_notifier.bot.handlers import add_student, common, my_students
 from ege_notifier.providers.base import StudentNotFoundError
+from ege_notifier.services.cards import CardRenderError
 from ege_notifier.services.diff import ChangeType, ResultChange
 from ege_notifier.services.results import RefreshThrottled
 
@@ -28,7 +30,8 @@ class FakeMessage:
     def __init__(self, user_id=None):
         self.answers: list[str] = []
         self.edits: list[str] = []
-        self.markups: list = []  # клавиатуры последних answer/edit
+        self.photos: list[tuple] = []  # (photo, caption) отправленных answer_photo
+        self.markups: list = []  # клавиатуры последних answer/edit/photo
         self.from_user = (
             SimpleNamespace(id=user_id, username=None, full_name=None)
             if user_id is not None
@@ -41,6 +44,10 @@ class FakeMessage:
 
     async def edit_text(self, text, reply_markup=None):
         self.edits.append(text)
+        self.markups.append(reply_markup)
+
+    async def answer_photo(self, photo, caption=None, reply_markup=None):
+        self.photos.append((photo, caption))
         self.markups.append(reply_markup)
 
 
@@ -89,11 +96,28 @@ class FakeNotifier:
         return True
 
 
-# Заглушка настроек: хендлерам нужны лишь URL сайта и TTL ссылки-приглашения.
+# Заглушка настроек: хендлерам нужны URL сайта, TTL ссылки и параметры карточки.
 SETTINGS = SimpleNamespace(
     results_site_url="https://www.ege.spb.ru/result/index.php?mode=ege2026&wave=1",
     share_link_ttl_seconds=86400,
+    card_renderer_enabled=True,
+    exam_label="ЕГЭ · 2026",
 )
+
+
+class FakeCardRenderer:
+    """Двойник рендерера карточек: отдаёт фиксированные байты или бросает ошибку."""
+
+    def __init__(self, png=b"PNGDATA", error=None):
+        self._png = png
+        self._error = error
+        self.calls: list[tuple] = []
+
+    async def render_student(self, student, *, exam):
+        self.calls.append((student, exam))
+        if self._error is not None:
+            raise self._error
+        return self._png
 
 
 # --- двойники сервисов --------------------------------------------------------
@@ -330,7 +354,7 @@ async def test_open_card_sends_snapshot_to_subscriber(monkeypatch):
     message = FakeMessage()
     callback = FakeCallback(message, user_id=1, data=f"student:{student.id}")
 
-    await my_students.open_card(callback, subs)
+    await my_students.open_card(callback, subs, SETTINGS)
 
     # Подписчику показали сохранённый снимок баллов (правкой сообщения, без проверки источника).
     assert any("Русский язык" in a for a in message.edits)
@@ -344,7 +368,7 @@ async def test_open_card_rejects_non_subscriber(monkeypatch):
     message = FakeMessage()
     callback = FakeCallback(message, user_id=1, data=f"student:{student.id}")
 
-    await my_students.open_card(callback, subs)
+    await my_students.open_card(callback, subs, SETTINGS)
 
     # Не подписан → результаты чужого ученика не утекают.
     assert message.answers == [] and message.edits == []
@@ -418,6 +442,92 @@ async def test_share_student_rejects_non_subscriber(monkeypatch):
     # Не подписан → ссылку не выдаём.
     assert message.answers == [] and message.edits == []
     assert callback.answered == ["Ученик не найден"]
+
+
+# --- make_card (картинка для сторис) -----------------------------------------
+
+
+async def test_make_card_sends_photo_to_subscriber(monkeypatch):
+    monkeypatch.setattr(my_students, "Message", FakeMessage)
+    student = _student(results=[_result_item()])
+    _patch_student_get(monkeypatch, student)
+    subs = FakeSubscriptions(student, created=False, subscribers=[1, 2])
+    cards = FakeCardRenderer(png=b"PNGBYTES")
+    message = FakeMessage()
+    callback = FakeCallback(message, user_id=1, data=f"card:{student.id}")
+
+    await my_students.make_card(callback, subs, cards, SETTINGS)
+
+    # Подписчику ушла картинка с подписью-приглашением в сторис; рендер позвали с меткой ЕГЭ.
+    assert len(message.photos) == 1
+    photo, caption = message.photos[0]
+    assert "Иванов" in caption
+    assert cards.calls == [(student, "ЕГЭ · 2026")]
+    assert callback.answered == [None]  # финальный «пустой» ответ снимает спиннер
+
+
+async def test_make_card_rejects_non_subscriber(monkeypatch):
+    monkeypatch.setattr(my_students, "Message", FakeMessage)
+    student = _student(results=[_result_item()])
+    _patch_student_get(monkeypatch, student)
+    subs = FakeSubscriptions(student, created=False, subscribers=[2, 3])
+    cards = FakeCardRenderer()
+    message = FakeMessage()
+    callback = FakeCallback(message, user_id=1, data=f"card:{student.id}")
+
+    await my_students.make_card(callback, subs, cards, SETTINGS)
+
+    # Не подписан → картинку с баллами не отдаём и рендер не дёргаем.
+    assert message.photos == []
+    assert cards.calls == []
+    assert callback.answered == ["Ученик не найден"]
+
+
+async def test_make_card_no_results_alerts(monkeypatch):
+    monkeypatch.setattr(my_students, "Message", FakeMessage)
+    student = _student(results=[])  # баллов ещё нет — рисовать нечего
+    _patch_student_get(monkeypatch, student)
+    subs = FakeSubscriptions(student, created=False, subscribers=[1])
+    cards = FakeCardRenderer()
+    message = FakeMessage()
+    callback = FakeCallback(message, user_id=1, data=f"card:{student.id}")
+
+    await my_students.make_card(callback, subs, cards, SETTINGS)
+
+    assert message.photos == []
+    assert cards.calls == []
+    assert callback.answered == [texts.CARD_NO_RESULTS]
+
+
+async def test_make_card_handles_render_error(monkeypatch):
+    monkeypatch.setattr(my_students, "Message", FakeMessage)
+    student = _student(results=[_result_item()])
+    _patch_student_get(monkeypatch, student)
+    subs = FakeSubscriptions(student, created=False, subscribers=[1])
+    cards = FakeCardRenderer(error=CardRenderError("renderer down"))
+    message = FakeMessage()
+    callback = FakeCallback(message, user_id=1, data=f"card:{student.id}")
+
+    await my_students.make_card(callback, subs, cards, SETTINGS)
+
+    # Сбой рендерера не роняет бота: фото нет, пользователю — понятный алерт.
+    assert message.photos == []
+    assert callback.answered == [texts.CARD_FAILED]
+
+
+async def test_make_card_when_renderer_unavailable(monkeypatch):
+    monkeypatch.setattr(my_students, "Message", FakeMessage)
+    student = _student(results=[_result_item()])
+    _patch_student_get(monkeypatch, student)
+    subs = FakeSubscriptions(student, created=False, subscribers=[1])
+    message = FakeMessage()
+    callback = FakeCallback(message, user_id=1, data=f"card:{student.id}")
+
+    # cards=None (рендерер выключен в конфиге) → алерт, без падения.
+    await my_students.make_card(callback, subs, None, SETTINGS)
+
+    assert message.photos == []
+    assert callback.answered == [texts.CARD_FAILED]
 
 
 # --- нижняя ReplyKeyboard (common) -------------------------------------------

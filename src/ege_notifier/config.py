@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Literal
 from urllib.parse import urlencode
 
@@ -61,6 +62,16 @@ class Settings(BaseSettings):
     # Сколько живёт одноразовая ссылка, пока её не использовали (потом удаляется TTL).
     share_link_ttl_seconds: int = 86400
 
+    # --- Картинка с результатами (рендерер render-takumi на Bun + takumi-js) ---
+    # Из карточки ученика по кнопке генерируется красивый PNG с баллами — «можно
+    # выложить в сторис». Бот ходит к сервису по HTTP (POST /cards/summary.png).
+    # CARD_RENDERER_URL: адрес сервиса (в docker compose — http://card-renderer:3000).
+    # Если выключено или сервис недоступен — кнопка не показывается / даёт ошибку.
+    card_renderer_enabled: bool = True
+    card_renderer_url: str = "http://localhost:3000"
+    card_render_scale: int = 2  # множитель разрешения PNG (1..4)
+    card_render_timeout: float = 30.0
+
     # --- Монитор страницы-обзора ege.spb.ru ---
     # Дешёвый GET одной страницы раз в N секунд: если вырос счётчик «Количество
     # результатов в базе данных» или в #w2 (Основной период) появился новый предмет —
@@ -95,3 +106,9 @@ class Settings(BaseSettings):
         base = self.ege_spb_base_url.rstrip("/")
         params = urlencode({"mode": self.ege_spb_mode, "wave": self.ege_spb_wave})
         return f"{base}/result/index.php?{params}"
+
+    @property
+    def exam_label(self) -> str:
+        """Подпись кампании для карточки результатов: «ege2026» → «ЕГЭ · 2026»."""
+        match = re.search(r"\d{4}", self.ege_spb_mode)
+        return f"ЕГЭ · {match.group()}" if match else "ЕГЭ"

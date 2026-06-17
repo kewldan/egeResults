@@ -16,12 +16,22 @@ services:
       timeout: 5s
       retries: 5
 
+  # Рендерер карточек результатов (Bun + takumi-js). Бот ходит к нему по имени
+  # сервиса; наружу порт не публикуем — он нужен только боту внутри сети compose.
+  card-renderer:
+    build: ./render-takumi
+    restart: unless-stopped
+
   bot:
     build: .
     restart: unless-stopped
     env_file: .env
     environment:
       REDIS_URL: redis://redis:6379/0
+      # Адрес рендерера внутри сети compose (переопределяет .env).
+      CARD_RENDERER_URL: http://card-renderer:3000
     depends_on:
       redis:
         condition: service_healthy
+      card-renderer:
+        condition: service_started

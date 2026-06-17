@@ -1,0 +1,18 @@
+{
+  "name": "ege-takumi-render",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "serve": "bun run src/server.tsx",
+    "dev": "bun --watch src/server.tsx"
+  },
+  "dependencies": {
+    "react": "^19.0.0",
+    "takumi-js": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/react": "^19.0.0"
+  }
+}

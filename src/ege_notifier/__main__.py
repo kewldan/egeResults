@@ -13,6 +13,7 @@ from ege_notifier.providers import build_provider
 from ege_notifier.providers.ege_spb_overview import EgeSpbOverviewMonitor
 from ege_notifier.scheduler import build_scheduler, run_check_cycle, run_monitor_cycle
 from ege_notifier.security import Cipher
+from ege_notifier.services.cards import CardRenderer
 from ege_notifier.services.monitor import MonitorService
 from ege_notifier.services.notifier import Notifier
 from ege_notifier.services.results import ResultsService
@@ -66,8 +67,17 @@ async def main() -> None:
         )
         monitor = MonitorService(overview)
 
+    # Рендерер карточек результатов (отдельный сервис на Bun). Выключен → кнопки нет.
+    cards: CardRenderer | None = None
+    if settings.card_renderer_enabled:
+        cards = CardRenderer(
+            settings.card_renderer_url,
+            scale=settings.card_render_scale,
+            timeout=settings.card_render_timeout,
+        )
+
     storage = build_storage(settings.redis_url)
-    dp = build_dispatcher(subscriptions, results, notifier, settings, storage)
+    dp = build_dispatcher(subscriptions, results, notifier, settings, storage, cards)
     scheduler = build_scheduler(settings, results, notifier, subscriptions, monitor)
     scheduler.start()
     logger.info(
@@ -113,6 +123,8 @@ async def main() -> None:
             await _safe_close("provider", aclose())
         if overview is not None:
             await _safe_close("overview monitor", overview.aclose())
+        if cards is not None:
+            await _safe_close("card renderer", cards.aclose())
         await _safe_close("mongo client", client.close())
 
 

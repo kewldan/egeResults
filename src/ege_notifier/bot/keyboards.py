@@ -53,14 +53,23 @@ def students_keyboard(students: list[Student]) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-def student_card_keyboard(student_id: object) -> InlineKeyboardMarkup:
-    """Карточка ученика: действия над ним (проверить/поделиться/удалить)."""
+def student_card_keyboard(
+    student_id: object, *, with_card: bool = False
+) -> InlineKeyboardMarkup:
+    """Карточка ученика: действия над ним (проверить/поделиться/удалить).
+
+    ``with_card`` добавляет кнопку «🖼 Картинка для сторис» — показываем её только
+    когда рендерер включён и у ученика уже есть результаты (иначе рисовать нечего)."""
     kb = InlineKeyboardBuilder()
     kb.button(text="🔄 Обновить", callback_data=f"check:{student_id}")
     kb.button(text="🔗 Поделиться", callback_data=f"share:{student_id}")
+    if with_card:
+        kb.button(text="🖼 Картинка для сторис", callback_data=f"card:{student_id}")
     kb.button(text="🗑 Удалить", callback_data=f"del:{student_id}")
     kb.button(text="⬅️ К списку", callback_data="my_students")
-    kb.adjust(2, 1, 1)
+    # Раскладка: «обновить»/«поделиться» в ряд, затем картинка (если есть), удалить,
+    # «к списку» — каждая своей строкой.
+    kb.adjust(2, *([1] * (3 if with_card else 2)))
     return kb.as_markup()
 
 

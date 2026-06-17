@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import logging
+
 from aiogram import F, Router
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import BufferedInputFile, CallbackQuery, Message
 from aiogram.utils.deep_linking import create_start_link
 from beanie import PydanticObjectId
 
@@ -17,9 +19,12 @@ from ege_notifier.bot.ui import edit_message
 from ege_notifier.config import Settings
 from ege_notifier.models import Student
 from ege_notifier.providers.base import StudentNotFoundError
+from ege_notifier.services.cards import CardRenderer, CardRenderError
 from ege_notifier.services.notifier import Notifier
 from ege_notifier.services.results import RefreshThrottled, ResultsService
 from ege_notifier.services.subscriptions import SubscriptionService
+
+logger = logging.getLogger(__name__)
 
 router = Router(name="my_students")
 
@@ -29,6 +34,11 @@ def _parse_id(data: str) -> PydanticObjectId | None:
         return PydanticObjectId(data.split(":", 1)[1])
     except (IndexError, ValueError):
         return None
+
+
+def _can_card(settings: Settings, student: Student) -> bool:
+    """Показывать ли кнопку картинки: рендерер включён и есть что рисовать (баллы)."""
+    return settings.card_renderer_enabled and bool(student.results)
 
 
 async def _show_list(
@@ -51,7 +61,7 @@ async def list_students(
 
 @router.callback_query(F.data.startswith("student:"))
 async def open_card(
-    callback: CallbackQuery, subscriptions: SubscriptionService
+    callback: CallbackQuery, subscriptions: SubscriptionService, settings: Settings
 ) -> None:
     """Карточка ученика: текущие результаты + действия (обновить/поделиться/удалить)."""
     student_id = _parse_id(callback.data or "")
@@ -72,7 +82,7 @@ async def open_card(
         await edit_message(
             callback.message,
             texts.format_current_results(student),
-            student_card_keyboard(student_id),
+            student_card_keyboard(student_id, with_card=_can_card(settings, student)),
         )
 
 
@@ -149,7 +159,7 @@ async def check_now(
     if not isinstance(callback.message, Message):
         return
 
-    card = student_card_keyboard(student.id)
+    card = student_card_keyboard(student.id, with_card=_can_card(settings, student))
     try:
         changes = await results.check_student(student, manual=True)
     except StudentNotFoundError:
@@ -185,3 +195,54 @@ async def check_now(
             texts.NO_CHANGES.format(label=texts.student_label(student)),
             card,
         )
+
+
+@router.callback_query(F.data.startswith("card:"))
+async def make_card(
+    callback: CallbackQuery,
+    subscriptions: SubscriptionService,
+    cards: CardRenderer | None,
+    settings: Settings,
+) -> None:
+    """Генерирует PNG-карточку с результатами и шлёт картинку (можно в сторис).
+
+    Картинку с баллами отдаём только подписчику; перед рендером проверяем, что есть
+    что рисовать. Сетевые/HTTP-сбои рендерера (``CardRenderError``) не роняют бота —
+    показываем алерт. Спиннер на кнопке висит до финального ``answer`` (рендер быстрый),
+    поэтому единственный ответ даём в конце — иначе алерт об ошибке не показался бы.
+    """
+    student_id = _parse_id(callback.data or "")
+    if student_id is None:
+        await callback.answer("Некорректный идентификатор", show_alert=True)
+        return
+    if callback.from_user.id not in await subscriptions.subscribers_for(student_id):
+        await callback.answer("Ученик не найден", show_alert=True)
+        return
+    student = await Student.get(student_id)
+    if student is None:
+        await callback.answer("Ученик не найден", show_alert=True)
+        return
+    if cards is None or not settings.card_renderer_enabled:
+        await callback.answer(texts.CARD_FAILED, show_alert=True)
+        return
+    if not student.results:
+        await callback.answer(texts.CARD_NO_RESULTS, show_alert=True)
+        return
+    if not isinstance(callback.message, Message):
+        await callback.answer()
+        return
+
+    try:
+        png = await cards.render_student(student, exam=settings.exam_label)
+    except CardRenderError as exc:
+        logger.warning("Не удалось отрендерить карточку %s: %s", student_id, exc)
+        await callback.answer(texts.CARD_FAILED, show_alert=True)
+        return
+
+    photo = BufferedInputFile(png, filename=f"ege_{student_id}.png")
+    await callback.message.answer_photo(
+        photo,
+        caption=texts.card_caption(student),
+        reply_markup=back_to_list_keyboard(),
+    )
+    await callback.answer()

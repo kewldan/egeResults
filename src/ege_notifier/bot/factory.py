@@ -8,6 +8,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 
 from ege_notifier.bot.handlers import add_student, admin, common, my_students
 from ege_notifier.config import Settings
+from ege_notifier.services.cards import CardRenderer
 from ege_notifier.services.notifier import Notifier
 from ege_notifier.services.results import ResultsService
 from ege_notifier.services.subscriptions import SubscriptionService
@@ -35,6 +36,7 @@ def build_dispatcher(
     notifier: Notifier,
     settings: Settings,
     storage: BaseStorage | None = None,
+    cards: CardRenderer | None = None,
 ) -> Dispatcher:
     dp = Dispatcher(storage=storage or MemoryStorage())
     # Сервисы прокидываются в хендлеры через workflow data (по имени аргумента).
@@ -42,6 +44,8 @@ def build_dispatcher(
     dp["results"] = results
     dp["notifier"] = notifier
     dp["settings"] = settings
+    # Рендерер карточек: None, если выключен — хендлер make_card это учитывает.
+    dp["cards"] = cards
 
     dp.include_router(common.router)
     # admin — выше add_student, чтобы /top и /check ловились по Command-фильтру даже
