@@ -35,7 +35,7 @@ function gallery(): string {
     .join("");
   return `<!doctype html><html lang="ru"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Тёмное стекло · Takumi</title>
+<title>Liquid Glass · Takumi</title>
 <style>
   body{margin:0;min-height:100vh;background:#0a0c14;color:#e9e9ec;font-family:system-ui,sans-serif;padding:56px}
   h1{font-weight:600;letter-spacing:-.01em;margin:0 0 6px}
@@ -47,8 +47,8 @@ function gallery(): string {
   code{color:#7a5cff;font-size:12px}
   pre{background:#11131c;border:1px solid #20222e;border-radius:12px;padding:16px 18px;color:#c9c4ff;font-size:12.5px;overflow:auto;max-width:880px}
 </style></head><body>
-<h1>Тёмное стекло — серверный рендер на Takumi</h1>
-<p>Bun + takumi-js · GET = мок-значения · POST = данные из JSON-тела · PNG без скруглённых углов</p>
+<h1>Liquid Glass — серверный рендер на Takumi</h1>
+<p>Bun + takumi-js · настоящий backdrop-frost + плёночное зерно (feTurbulence) · GET = мок · POST = JSON · PNG без скруглённых углов</p>
 <div class="grid">${items}</div>
 <pre>curl -X POST http://localhost:${process.env.PORT ?? 3000}/cards/russian.png?scale=2 \\
   -H 'content-type: application/json' \\
