@@ -13,6 +13,7 @@ from ege_notifier.providers import build_provider
 from ege_notifier.providers.ege_spb_overview import EgeSpbOverviewMonitor
 from ege_notifier.scheduler import build_scheduler, run_check_cycle, run_monitor_cycle
 from ege_notifier.security import Cipher
+from ege_notifier.services.blanks import BlankDownloader
 from ege_notifier.services.cards import CardRenderer
 from ege_notifier.services.monitor import MonitorService
 from ege_notifier.services.notifier import Notifier
@@ -56,7 +57,10 @@ async def main() -> None:
     subscriptions = SubscriptionService(settings, cipher)
     bot = build_bot(settings.bot_token)
     notifier = Notifier(bot, settings.broadcast_delay, settings.admin_ids)
-    results = ResultsService(settings, provider, subscriptions)
+    # Загрузчик сканов бланков (ege.spb.ru): при проверке кладёт файлы на диск, а
+    # хендлер «📄 Бланки» раздаёт их. Клиент httpx создаётся лениво при первом качании.
+    blanks = BlankDownloader(timeout=settings.request_timeout)
+    results = ResultsService(settings, provider, subscriptions, blanks)
 
     # Монитор страницы-обзора — основной триггер проверок (см. scheduler).
     overview: EgeSpbOverviewMonitor | None = None
@@ -77,7 +81,9 @@ async def main() -> None:
         )
 
     storage = build_storage(settings.redis_url)
-    dp = build_dispatcher(subscriptions, results, notifier, settings, storage, cards)
+    dp = build_dispatcher(
+        subscriptions, results, notifier, settings, storage, cards, blanks
+    )
     scheduler = build_scheduler(settings, results, notifier, subscriptions, monitor)
     scheduler.start()
     logger.info(
@@ -125,6 +131,7 @@ async def main() -> None:
             await _safe_close("overview monitor", overview.aclose())
         if cards is not None:
             await _safe_close("card renderer", cards.aclose())
+        await _safe_close("blank downloader", blanks.aclose())
         await _safe_close("mongo client", client.close())
 
 

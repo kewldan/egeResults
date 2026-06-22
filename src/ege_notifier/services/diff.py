@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
-from ege_notifier.models.student import ResultItem
+from ege_notifier.models.student import BlankImage, Criterion, ResultItem, TaskAnswer
 from ege_notifier.providers.base import FetchedResult
 from ege_notifier.utils import normalize_subject, utcnow
 
@@ -27,10 +27,53 @@ class ResultChange:
 
 
 def _is_changed(old: ResultItem, fetched: FetchedResult) -> bool:
+    """Считается ли результат изменившимся (→ уведомление).
+
+    ВАЖНО: сравниваем ТОЛЬКО ``value``/``score``/``status``. Детализация
+    (критерии, первичные баллы, распознанные ответы, бланки, регистрации) сюда НЕ
+    входит специально — её появление после обновления парсера не должно вызывать
+    повторных уведомлений у уже отслеживаемых учеников."""
     value_changed = fetched.value is not None and fetched.value != old.value
     score_changed = fetched.score is not None and fetched.score != old.score
     status_changed = fetched.status is not None and fetched.status != old.status
     return value_changed or score_changed or status_changed
+
+
+def _detail_kwargs(
+    fetched: FetchedResult, old: ResultItem | None, *, changed: bool = False
+) -> dict:
+    """Поля детализации для ``ResultItem``: свежие из ответа, иначе — прежние.
+
+    Детализацию сохраняем всегда (свежая важнее), но если источник её не отдал
+    (пустые списки / ``None``) — не затираем уже известную. На diff не влияет:
+    ``_is_changed`` её не смотрит, поэтому обновление детали уведомлений не шлёт.
+
+    ``changed=True`` (изменились value/score/status) сбрасывает «прежнюю» деталь: она
+    относилась к старому баллу, и держать её рядом с новым нельзя — пусть заполнится
+    свежей на этой же / следующей проверке.
+
+    ``BlankImage.path`` уже скачанного скана переносим со старого по совпадению
+    заголовка: ссылка ``download.php`` одноразовая и в ответе меняется, а файл на
+    диске остаётся — иначе пересборка снимка «теряла» бы путь до скачанного бланка."""
+    if changed:
+        old = None
+    old_blank_path = {b.title: b.path for b in old.blanks} if old else {}
+    criteria = [Criterion(name=c.name, value=c.value) for c in fetched.criteria]
+    recognition = [TaskAnswer(task=t.task, answer=t.answer) for t in fetched.recognition]
+    blanks = [
+        BlankImage(title=b.title, url=b.url, path=old_blank_path.get(b.title))
+        for b in fetched.blanks
+    ]
+    return {
+        "criteria": criteria or (old.criteria if old else []),
+        "primary_score": (
+            fetched.primary_score
+            if fetched.primary_score is not None
+            else (old.primary_score if old else None)
+        ),
+        "recognition": recognition or (old.recognition if old else []),
+        "blanks": blanks or (old.blanks if old else []),
+    }
 
 
 def diff_results(
@@ -108,6 +151,7 @@ def merge_results(
                     raw=f.raw,
                     first_seen_at=now,
                     updated_at=now,
+                    **_detail_kwargs(f, None),
                 )
             )
         else:
@@ -122,7 +166,10 @@ def merge_results(
                     exam_date=f.exam_date or old.exam_date,
                     raw=f.raw or old.raw,
                     first_seen_at=old.first_seen_at,
+                    # updated_at двигается только при изменении value/score/status —
+                    # тихое обновление детали его не трогает (нет «нового результата»).
                     updated_at=now if changed else old.updated_at,
+                    **_detail_kwargs(f, old, changed=changed),
                 )
             )
 

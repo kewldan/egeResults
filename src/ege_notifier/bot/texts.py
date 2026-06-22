@@ -8,6 +8,7 @@ from ege_notifier.models import Student, User
 from ege_notifier.services.diff import ChangeType, ResultChange
 
 if TYPE_CHECKING:
+    from ege_notifier.models.student import ResultItem
     from ege_notifier.providers.ege_spb_overview import PublishedSubject
     from ege_notifier.services.ranking import (
         ComboRankEntry,
@@ -265,6 +266,118 @@ def format_current_results(student: Student) -> str:
         status = f" · {_esc(item.status)}" if item.status else ""
         lines.append(f"• <b>{title}</b>: {value}{status}")
     return "\n".join(lines)
+
+
+# --- Расписание / детализация / бланки (в карточке ученика) ------------------
+
+# Защитный предел длины (Telegram режет сообщение на 4096 символов).
+_MSG_LIMIT = 3900
+
+
+def _truncate(lines: list[str], note: str) -> str:
+    """Склеивает строки под лимит длины Telegram, обрезая ПО ГРАНИЦЕ строк.
+
+    Резать по символам нельзя: parse_mode=HTML, и срез посреди тега (``<b``) или
+    сущности (``&l``) даёт битую разметку — Telegram ответит «can't parse entities»,
+    а ``edit_message`` повторит ту же битую разметку через ``answer`` и упадёт. Каждая
+    строка/блок самодостаточны (теги внутри сбалансированы), поэтому отбрасываем
+    строки целиком, пока влезает заголовок + пометка."""
+    text = "\n".join(lines)
+    if len(text) <= _MSG_LIMIT:
+        return text
+    budget = _MSG_LIMIT - len(note) - 2  # «\n\n» перед пометкой
+    kept: list[str] = []
+    used = 0
+    for line in lines:
+        extra = len(line) + (1 if kept else 0)  # перевод строки между строками
+        if used + extra > budget:
+            break
+        kept.append(line)
+        used += extra
+    return "\n".join(kept) + f"\n\n{note}"
+
+
+def format_schedule(student: Student) -> str:
+    """Расписание экзаменов ученика: дата · предмет · пункт проведения и адрес."""
+    header = (
+        f"📅 <b>Расписание экзаменов</b>: <b>{_esc(student.last_name)}</b> "
+        f"({_esc(student.passport_masked)})"
+    )
+    if not student.registrations:
+        return (
+            f"{header}\n\nРасписание пока не загружено. Нажмите 🔄 «Обновить» — оно "
+            "появится после ближайшей проверки на сайте."
+        )
+    lines = [header, ""]
+    for reg in student.registrations:
+        title = _esc(reg.subject_title or reg.subject)
+        date = _esc(reg.exam_date) if reg.exam_date else "дата уточняется"
+        lines.append(f"• <b>{date}</b> — {title}")
+        if reg.place:
+            place = _esc(reg.place)
+            addr = f", {_esc(reg.address)}" if reg.address else ""
+            lines.append(f"  📍 {place}{addr}")
+        else:
+            lines.append("  📍 пункт проведения станет известен ближе к экзамену")
+    return _truncate(lines, "… список обрезан.")
+
+
+def _criteria_line(item: "ResultItem") -> str | None:
+    parts = [f"{_esc(c.name)}: <b>{_esc(c.value)}</b>" for c in item.criteria]
+    return " · ".join(parts) if parts else None
+
+
+def _recognition_line(item: "ResultItem") -> str | None:
+    parts = [f"{_esc(t.task)}: {_esc(t.answer)}" for t in item.recognition]
+    return " · ".join(parts) if parts else None
+
+
+def format_details(student: Student) -> str:
+    """Подробности по предметам: критерии, первичный балл, распознанные ответы.
+
+    Это админ/владелец-инструмент в карточке — показываем ОТКРЫТО (без спойлера),
+    чтобы детализация читалась сразу."""
+    header = (
+        f"📊 <b>Детали результатов</b>: <b>{_esc(student.last_name)}</b> "
+        f"({_esc(student.passport_masked)})"
+    )
+    blocks: list[str] = [header]
+    for item in student.results:
+        criteria = _criteria_line(item)
+        recognition = _recognition_line(item)
+        if not criteria and item.primary_score is None and not recognition:
+            continue
+        title = _esc(item.subject_title or item.subject)
+        block = [f"\n<b>{title}</b>"]
+        if item.primary_score is not None:
+            block.append(f"Первичный балл: <b>{item.primary_score}</b>")
+        if criteria:
+            block.append(f"Критерии: {criteria}")
+        if recognition:
+            block.append(f"Распознанные ответы: {recognition}")
+        blocks.append("\n".join(block))
+    if len(blocks) == 1:
+        return (
+            f"{header}\n\nПодробных данных по предметам пока нет — они появятся вместе "
+            "с результатами после проверки на сайте."
+        )
+    return _truncate(blocks, "… детали обрезаны.")
+
+
+# Алерты callback.answer — без HTML (Telegram показывает их простым текстом).
+BLANKS_NONE = "Сканов бланков пока нет — появятся вместе с результатами."
+BLANKS_SENDING = "Скачиваю бланки…"
+BLANKS_FAILED = "Не удалось скачать бланки. Попробуйте позже."
+
+
+def blanks_header(student: Student) -> str:
+    """Заголовок перед отправкой файлов бланков."""
+    return f"📄 <b>Бланки ответов</b>: <b>{_esc(student.last_name)}</b>"
+
+
+def blank_caption(subject_title: str, blank_title: str) -> str:
+    """Подпись под файлом бланка: предмет — что за лист."""
+    return f"{_esc(subject_title)} — {_esc(blank_title)}"
 
 
 def admin_new_results(student: Student, changes: list[ResultChange]) -> str:

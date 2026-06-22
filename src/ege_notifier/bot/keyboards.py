@@ -53,23 +53,60 @@ def students_keyboard(students: list[Student]) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-def student_card_keyboard(
-    student_id: object, *, with_card: bool = False
-) -> InlineKeyboardMarkup:
-    """Карточка ученика: действия над ним (проверить/поделиться/удалить).
+def _has_details(student: Student) -> bool:
+    """Есть ли у ученика подробности по предметам (критерии/первичный балл/ответы)."""
+    return any(
+        r.criteria or r.primary_score is not None or r.recognition
+        for r in student.results
+    )
 
-    ``with_card`` добавляет кнопку «🖼 Картинка для сторис» — показываем её только
-    когда рендерер включён и у ученика уже есть результаты (иначе рисовать нечего)."""
+
+def _has_blanks(student: Student) -> bool:
+    return any(r.blanks for r in student.results)
+
+
+def student_card_keyboard(
+    student: Student, *, with_card: bool = False
+) -> InlineKeyboardMarkup:
+    """Карточка ученика: действия (проверить/поделиться/удалить) + просмотр данных.
+
+    Кнопки данных показываем только когда есть что показать: 📅 «Расписание» (есть
+    регистрации), 📊 «Детали» (есть критерии/первичный балл/распознанные ответы),
+    📄 «Бланки» (есть сканы). ``with_card`` добавляет «🖼 Картинка для сторис» —
+    только когда рендерер включён и у ученика есть результаты."""
+    sid = student.id
     kb = InlineKeyboardBuilder()
-    kb.button(text="🔄 Обновить", callback_data=f"check:{student_id}")
-    kb.button(text="🔗 Поделиться", callback_data=f"share:{student_id}")
+    kb.button(text="🔄 Обновить", callback_data=f"check:{sid}")
+    kb.button(text="🔗 Поделиться", callback_data=f"share:{sid}")
+
+    info_buttons = 0
+    if student.registrations:
+        kb.button(text="📅 Расписание", callback_data=f"schedule:{sid}")
+        info_buttons += 1
+    if _has_details(student):
+        kb.button(text="📊 Детали", callback_data=f"details:{sid}")
+        info_buttons += 1
+    if _has_blanks(student):
+        kb.button(text="📄 Бланки", callback_data=f"blanks:{sid}")
+        info_buttons += 1
+
     if with_card:
-        kb.button(text="🖼 Картинка для сторис", callback_data=f"card:{student_id}")
-    kb.button(text="🗑 Удалить", callback_data=f"del:{student_id}")
+        kb.button(text="🖼 Картинка для сторис", callback_data=f"card:{sid}")
+    kb.button(text="🗑 Удалить", callback_data=f"del:{sid}")
     kb.button(text="⬅️ К списку", callback_data="my_students")
-    # Раскладка: «обновить»/«поделиться» в ряд, затем картинка (если есть), удалить,
-    # «к списку» — каждая своей строкой.
-    kb.adjust(2, *([1] * (3 if with_card else 2)))
+
+    # Раскладка: «обновить»/«поделиться» в ряд; кнопки данных по 2 в ряд; картинка,
+    # удалить, «к списку» — каждая своей строкой.
+    full, rem = divmod(info_buttons, 2)
+    info_rows = [2] * full + ([rem] if rem else [])
+    kb.adjust(2, *info_rows, *([1] * (3 if with_card else 2)))
+    return kb.as_markup()
+
+
+def back_to_card_keyboard(student_id: object) -> InlineKeyboardMarkup:
+    """Возврат из экрана данных (расписание/детали) обратно в карточку ученика."""
+    kb = InlineKeyboardBuilder()
+    kb.button(text="⬅️ Назад", callback_data=f"student:{student_id}")
     return kb.as_markup()
 
 

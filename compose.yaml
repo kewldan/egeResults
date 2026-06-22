@@ -30,8 +30,15 @@ services:
       REDIS_URL: redis://redis:6379/0
       # Адрес рендерера внутри сети compose (переопределяет .env).
       CARD_RENDERER_URL: http://card-renderer:3000
+    # Скачанные сканы бланков переживают пересборку контейнера. Named-volume (а не
+    # bind) — чтобы не упереться в права: бот работает под непривилегированным uid.
+    volumes:
+      - blanks:/app/data/blanks
     depends_on:
       redis:
         condition: service_healthy
       card-renderer:
         condition: service_started
+
+volumes:
+  blanks:

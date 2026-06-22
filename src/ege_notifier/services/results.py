@@ -4,19 +4,35 @@ import asyncio
 import logging
 import weakref
 from dataclasses import dataclass
+from pathlib import Path
 
 from beanie import PydanticObjectId
 from beanie.exceptions import DocumentNotFound
 from beanie.operators import In
 
 from ege_notifier.config import Settings
-from ege_notifier.models import Student
+from ege_notifier.models import Registration, Student
 from ege_notifier.providers.base import ResultsProvider, StudentNotFoundError
+from ege_notifier.services.blanks import (
+    BlankDownloader,
+    BlankDownloadError,
+    blank_basename,
+    blank_stem,
+)
 from ege_notifier.services.diff import ResultChange, diff_results, merge_results
 from ege_notifier.services.subscriptions import SubscriptionService
 from ege_notifier.utils import utcnow
 
 logger = logging.getLogger(__name__)
+
+
+def _save_blank(base: Path, name: str, content: bytes) -> None:
+    """Синхронная запись скана бланка на диск (создаёт каталог ученика при нужде).
+
+    Вынесена отдельно, чтобы гонять её в пуле потоков (``asyncio.to_thread``) — запись
+    файла блокирующая, а ``_download_blanks`` крутится внутри цикла проверки."""
+    base.mkdir(parents=True, exist_ok=True)
+    (base / name).write_bytes(content)
 
 
 @dataclass(slots=True)
@@ -47,10 +63,14 @@ class ResultsService:
         settings: Settings,
         provider: ResultsProvider,
         subscriptions: SubscriptionService,
+        blanks: BlankDownloader | None = None,
     ):
         self._settings = settings
         self._provider = provider
         self._subs = subscriptions
+        # Загрузчик сканов бланков: при проверке кладём файлы на диск (см.
+        # _download_blanks). None → диск не используем (кнопка качает «на лету»).
+        self._blanks = blanks
         # Блокировки по id ученика: ручная и плановая проверки не должны
         # одновременно сохранять одного ученика (lost update / дубль-уведомление).
         # WeakValueDictionary — чтобы запись жила, только пока блокировку кто-то
@@ -130,7 +150,7 @@ class ResultsService:
     async def _check_student_locked(self, student: Student) -> list[ResultChange]:
         query = self._subs.to_query(student)
         try:
-            fetched = await self._provider.fetch(query)
+            snapshot = await self._provider.fetch(query)
         except StudentNotFoundError:
             # Источник не нашёл ученика (вероятна опечатка в фамилии/паспорте).
             # Помечаем флагом и пробрасываем выше — хендлер подскажет проверить
@@ -149,8 +169,25 @@ class ResultsService:
             logger.warning("Ошибка проверки ученика id=%s: %s", student.id, exc)
             return []
 
+        fetched = snapshot.results
         changes = diff_results(student.results, fetched)
         student.results = merge_results(student.results, fetched)
+        # Регистрации (когда/какой/где) — справочные, в diff не участвуют. Обновляем
+        # только когда источник их отдал, чтобы разовый сбой не стёр уже известные.
+        if snapshot.registrations:
+            student.registrations = [
+                Registration(
+                    subject=r.subject,
+                    subject_title=r.subject_title,
+                    exam_date=r.exam_date,
+                    place=r.place,
+                    address=r.address,
+                )
+                for r in snapshot.registrations
+            ]
+        # Скачиваем новые сканы бланков на диск и проставляем им path (до persist,
+        # чтобы пути сохранились в том же документе). Best-effort: сбой не валит проверку.
+        await self._download_blanks(student)
         student.last_checked_at = utcnow()
         student.last_error = None
         student.not_found = False
@@ -159,6 +196,41 @@ class ResultsService:
         if not await self._persist(student):
             return []  # ученика удалили во время проверки — не уведомляем
         return changes
+
+    async def _download_blanks(self, student: Student) -> None:
+        """Качает сканы бланков ученика на диск и проставляет ``BlankImage.path``.
+
+        Файлы лежат в ``<blanks_dir>/<identity_hash>/<предмет>__<лист>.<ext>``
+        (identity_hash, а не id — стабилен и не зависит от PII/переподписки). Уже
+        скачанный бланк не качаем повторно (ищем файл по имени без расширения).
+        Best-effort: сбой скачивания одного файла лишь оставляет ``path=None`` —
+        повторим на следующей проверке, проверку это не роняет."""
+        if self._blanks is None or not getattr(self._settings, "download_blanks", True):
+            return
+        pairs = [(item, blank) for item in student.results for blank in item.blanks]
+        if not pairs:
+            return
+        base = Path(self._settings.blanks_dir) / student.identity_hash
+        for item, blank in pairs:
+            subject = item.subject_title or item.subject
+            stem = blank_stem(subject, blank.title)
+            # Best-effort: ни сетевой сбой (BlankDownloadError), ни дисковый (OSError:
+            # том только для чтения / переполнен / нет прав на named-volume) не должны
+            # валить проверку — иначе исключение выбьет весь плановый цикл (check_all
+            # ловит лишь StudentNotFoundError). Оставляем path как есть, повторим позже.
+            try:
+                existing = next(base.glob(f"{stem}.*"), None) if base.exists() else None
+                if existing is not None:
+                    blank.path = f"{student.identity_hash}/{existing.name}"
+                    continue
+                content, content_type = await self._blanks.download(blank.url)
+                name = blank_basename(subject, blank.title, content_type)
+                # Запись блокирующая — уводим с event loop, чтобы не тормозить цикл.
+                await asyncio.to_thread(_save_blank, base, name, content)
+                blank.path = f"{student.identity_hash}/{name}"
+            except (BlankDownloadError, OSError) as exc:
+                logger.info("Бланк не сохранён (%s): %s", blank.title, exc)
+                continue
 
     async def check_all(self) -> list[StudentUpdate]:
         """Проверяет всех учеников, у которых есть хотя бы один подписчик."""

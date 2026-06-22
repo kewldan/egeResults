@@ -1,7 +1,14 @@
 from __future__ import annotations
 
+from ege_notifier.models.student import BlankImage as StoredBlank
+from ege_notifier.models.student import Criterion as StoredCriterion
 from ege_notifier.models.student import ResultItem
-from ege_notifier.providers.base import FetchedResult
+from ege_notifier.providers.base import (
+    BlankImage,
+    Criterion,
+    FetchedResult,
+    TaskAnswer,
+)
 from ege_notifier.services.diff import ChangeType, diff_results, merge_results
 
 
@@ -65,6 +72,104 @@ def test_diff_matches_old_key_after_normalization_change():
     existing = [ResultItem(subject="математика (профильная)", score=88, status="готов")]
     fetched = [FetchedResult(subject="математика профильная", score=88, status="готов")]
     assert diff_results(existing, fetched) == []
+
+
+def test_detail_only_change_is_not_a_change():
+    """Появление детализации (критерии/баллы/распознавание/бланки) при том же
+    value/score/status НЕ считается изменением — иначе после обновления парсера всем
+    отслеживаемым ученикам прилетели бы повторные уведомления."""
+    existing = [ResultItem(subject="russian", score=88, status="готов")]
+    fetched = [
+        FetchedResult(
+            subject="russian",
+            score=88,
+            status="готов",
+            criteria=[Criterion(name="Крит. К1", value="2")],
+            primary_score=37,
+            recognition=[TaskAnswer(task="1", answer="АБВ")],
+            blanks=[BlankImage(title="Бланк 1", url="https://x/d?f=1")],
+        )
+    ]
+    assert diff_results(existing, fetched) == []
+
+
+def test_merge_adds_detail_without_bumping_updated_at():
+    """Деталь сохраняется, но updated_at не двигается (раз value/score/status те же)."""
+    existing = [ResultItem(subject="russian", score=88, status="готов")]
+    prev_updated = existing[0].updated_at
+    fetched = [
+        FetchedResult(
+            subject="russian",
+            score=88,
+            status="готов",
+            criteria=[Criterion(name="Крит. К1", value="2")],
+            primary_score=37,
+            blanks=[BlankImage(title="Бланк 1", url="https://x/d?f=1")],
+        )
+    ]
+    merged = merge_results(existing, fetched)
+    assert merged[0].primary_score == 37
+    assert merged[0].criteria == [StoredCriterion(name="Крит. К1", value="2")]
+    assert merged[0].blanks == [StoredBlank(title="Бланк 1", url="https://x/d?f=1")]
+    assert merged[0].updated_at == prev_updated  # тихое обновление, без «нового результата»
+
+
+def test_merge_preserves_downloaded_blank_path():
+    """Путь до уже скачанного скана переносится на свежий снимок по заголовку.
+
+    Ссылка download.php одноразовая и в ответе меняется, а файл на диске остаётся —
+    без переноса path кнопка «Бланки» теряла бы локальный файл и качала заново."""
+    existing = [
+        ResultItem(
+            subject="russian",
+            score=88,
+            blanks=[StoredBlank(title="Бланк 1", url="https://x/d?f=old", path="HASH/x.pdf")],
+        )
+    ]
+    fetched = [
+        FetchedResult(
+            subject="russian",
+            score=88,
+            blanks=[BlankImage(title="Бланк 1", url="https://x/d?f=NEW")],
+        )
+    ]
+    merged = merge_results(existing, fetched)
+    assert merged[0].blanks[0].url == "https://x/d?f=NEW"  # ссылка свежая
+    assert merged[0].blanks[0].path == "HASH/x.pdf"  # путь к скачанному сохранён
+
+
+def test_merge_drops_stale_detail_when_result_changed():
+    """Если value/score/status изменились — прежняя деталь (от старого балла) не
+    тащится к новому результату (иначе экран «Детали» противоречил бы новому баллу)."""
+    existing = [
+        ResultItem(
+            subject="russian",
+            score=88,
+            criteria=[StoredCriterion(name="К1", value="2")],
+            primary_score=37,
+        )
+    ]
+    fetched = [FetchedResult(subject="russian", score=90)]  # новый балл, без детали
+    merged = merge_results(existing, fetched)
+    assert merged[0].score == 90
+    assert merged[0].criteria == []
+    assert merged[0].primary_score is None
+
+
+def test_merge_keeps_old_detail_when_fetch_lacks_it():
+    """Если источник не отдал детализацию — уже известную не затираем."""
+    existing = [
+        ResultItem(
+            subject="russian",
+            score=88,
+            criteria=[StoredCriterion(name="Крит. К1", value="2")],
+            primary_score=37,
+        )
+    ]
+    fetched = [FetchedResult(subject="russian", score=88)]  # без детали
+    merged = merge_results(existing, fetched)
+    assert merged[0].criteria == [StoredCriterion(name="Крит. К1", value="2")]
+    assert merged[0].primary_score == 37
 
 
 def test_merge_migrates_old_key_without_duplicating():

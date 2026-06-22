@@ -30,19 +30,20 @@ async def test_absent_passport_raises_not_found(tmp_path):
 
 async def test_present_but_empty_returns_no_results(tmp_path):
     provider = MockResultsProvider(_write(tmp_path, {"654321": []}))
-    assert await provider.fetch(_query("654321")) == []
+    assert (await provider.fetch(_query("654321"))).results == []
 
 
 async def test_present_with_results(tmp_path):
     provider = MockResultsProvider(
         _write(tmp_path, {"654321": [{"subject": "русский язык", "score": 88}]})
     )
-    results = await provider.fetch(_query("654321"))
-    assert len(results) == 1
-    assert results[0].score == 88
+    snapshot = await provider.fetch(_query("654321"))
+    assert len(snapshot.results) == 1
+    assert snapshot.results[0].score == 88
 
 
 async def test_missing_file_returns_empty(tmp_path):
     # Файла нет вовсе — не считаем это «ученик не найден» (это ошибка конфигурации).
     provider = MockResultsProvider(str(tmp_path / "nope.json"))
-    assert await provider.fetch(_query()) == []
+    snapshot = await provider.fetch(_query())
+    assert snapshot.results == [] and snapshot.registrations == []

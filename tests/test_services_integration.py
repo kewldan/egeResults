@@ -28,6 +28,7 @@ from ege_notifier.providers.base import (
     FetchedResult,
     ResultsProvider,
     StudentNotFoundError,
+    StudentSnapshot,
 )
 from ege_notifier.security import Cipher, hash_token
 from ege_notifier.services.results import RefreshThrottled, ResultsService
@@ -82,7 +83,7 @@ def _services(fetched: list[FetchedResult] | None = None):
 
 def _make_fetch(fetched: list[FetchedResult]):
     async def fetch(_query):
-        return list(fetched)
+        return StudentSnapshot(results=list(fetched))
 
     return fetch
 
@@ -212,7 +213,7 @@ async def test_check_student_does_not_resurrect_deleted_student():
             doc = await Student.get(student.id)
             assert doc is not None
             await doc.delete()
-            return list(fetched)
+            return StudentSnapshot(results=list(fetched))
 
         provider = _provider(fetch_then_delete)
         results = ResultsService(_settings(request_delay=0), provider, subs)

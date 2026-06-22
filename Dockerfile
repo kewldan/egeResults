@@ -30,6 +30,11 @@ COPY fixtures ./fixtures
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev
 
+# Каталог для скачанных сканов бланков (BLANKS_DIR). Создаём в образе, чтобы
+# named-volume при первом монтировании унаследовал владельца appuser (иначе
+# непривилегированный процесс не смог бы в него писать).
+RUN mkdir -p /app/data/blanks
+
 # Непривилегированный пользователь.
 RUN useradd --create-home --uid 10001 appuser \
     && chown -R appuser:appuser /app

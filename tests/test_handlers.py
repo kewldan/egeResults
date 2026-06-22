@@ -31,7 +31,8 @@ class FakeMessage:
         self.answers: list[str] = []
         self.edits: list[str] = []
         self.photos: list[tuple] = []  # (photo, caption) отправленных answer_photo
-        self.markups: list = []  # клавиатуры последних answer/edit/photo
+        self.documents: list[tuple] = []  # (document, caption) отправленных answer_document
+        self.markups: list = []  # клавиатуры последних answer/edit/photo/document
         self.from_user = (
             SimpleNamespace(id=user_id, username=None, full_name=None)
             if user_id is not None
@@ -48,6 +49,10 @@ class FakeMessage:
 
     async def answer_photo(self, photo, caption=None, reply_markup=None):
         self.photos.append((photo, caption))
+        self.markups.append(reply_markup)
+
+    async def answer_document(self, document, caption=None, reply_markup=None):
+        self.documents.append((document, caption))
         self.markups.append(reply_markup)
 
 
@@ -102,6 +107,7 @@ SETTINGS = SimpleNamespace(
     share_link_ttl_seconds=86400,
     card_renderer_enabled=True,
     exam_label="ЕГЭ · 2026",
+    blanks_dir="data/blanks",  # для send_blanks; в тестах файлов там нет → fallback
 )
 
 
@@ -171,7 +177,7 @@ class FakeResultsThrottled:
         raise RefreshThrottled(retry_after=120)
 
 
-def _student(results=None):
+def _student(results=None, registrations=None):
     sid = PydanticObjectId()
     return SimpleNamespace(
         id=sid,
@@ -179,6 +185,7 @@ def _student(results=None):
         last_name="Иванов",
         passport_masked="●●●● ●●●●74",
         results=results or [],
+        registrations=registrations or [],
         last_error=None,
         last_checked_at=None,
         not_found=False,
@@ -192,6 +199,10 @@ def _result_item():
         value="88",
         score=88,
         status="Действующий результат",
+        criteria=[],
+        primary_score=None,
+        recognition=[],
+        blanks=[],
     )
 
 
@@ -407,6 +418,209 @@ async def test_check_now_throttled_tells_user_to_wait(monkeypatch):
     assert any("Обновить" in a for a in message.edits)
     assert notifier.broadcasts == []
     assert notifier.admin == []
+
+
+# --- расписание / детали / бланки --------------------------------------------
+
+
+def _reg(subject, *, title=None, date=None, place=None, address=None):
+    return SimpleNamespace(
+        subject=subject, subject_title=title, exam_date=date, place=place, address=address
+    )
+
+
+def _blank(title, url, path=None):
+    return SimpleNamespace(title=title, url=url, path=path)
+
+
+def _detailed_item():
+    return SimpleNamespace(
+        subject="сочинение",
+        subject_title="Сочинение",
+        value="Зачёт",
+        score=None,
+        status="Действующий результат",
+        criteria=[SimpleNamespace(name="Крит. К1", value="Зачёт")],
+        primary_score=37,
+        recognition=[SimpleNamespace(task="1", answer="АБВ")],
+        blanks=[_blank("Бланк 1", "https://x/d?f=1"), _blank("Бланк 2", "https://x/d?f=2")],
+    )
+
+
+class FakeBlanks:
+    def __init__(self, content=b"%PDF", ctype="application/pdf", error=None):
+        self._content = content
+        self._ctype = ctype
+        self._error = error
+        self.urls: list[str] = []
+
+    async def download(self, url):
+        self.urls.append(url)
+        if self._error is not None:
+            raise self._error
+        return self._content, self._ctype
+
+
+async def test_show_schedule_edits_for_subscriber(monkeypatch):
+    monkeypatch.setattr(my_students, "Message", FakeMessage)
+    student = _student(registrations=[_reg("сочинение", title="Сочинение", date="3 декабря 2025", place="ГБОУ СОШ №669")])
+    _patch_student_get(monkeypatch, student)
+    subs = FakeSubscriptions(student, created=False, subscribers=[1, 2])
+    message = FakeMessage()
+    callback = FakeCallback(message, user_id=1, data=f"schedule:{student.id}")
+
+    await my_students.show_schedule(callback, subs)
+
+    assert any("3 декабря 2025" in e and "ГБОУ СОШ №669" in e for e in message.edits)
+
+
+async def test_show_schedule_rejects_non_subscriber(monkeypatch):
+    monkeypatch.setattr(my_students, "Message", FakeMessage)
+    student = _student(registrations=[_reg("x", title="X", date="1 июня")])
+    _patch_student_get(monkeypatch, student)
+    subs = FakeSubscriptions(student, created=False, subscribers=[2, 3])
+    message = FakeMessage()
+    callback = FakeCallback(message, user_id=1, data=f"schedule:{student.id}")
+
+    await my_students.show_schedule(callback, subs)
+
+    assert message.edits == [] and message.answers == []
+    assert callback.answered == ["Ученик не найден"]
+
+
+async def test_show_details_edits_for_subscriber(monkeypatch):
+    monkeypatch.setattr(my_students, "Message", FakeMessage)
+    student = _student(results=[_detailed_item()])
+    _patch_student_get(monkeypatch, student)
+    subs = FakeSubscriptions(student, created=False, subscribers=[1])
+    message = FakeMessage()
+    callback = FakeCallback(message, user_id=1, data=f"details:{student.id}")
+
+    await my_students.show_details(callback, subs)
+
+    assert any("Первичный балл" in e and "Крит. К1" in e for e in message.edits)
+
+
+async def test_send_blanks_falls_back_to_download_when_no_local_file(monkeypatch):
+    # path=None и файла на диске нет → качаем «на лету» по ссылке.
+    monkeypatch.setattr(my_students, "Message", FakeMessage)
+    monkeypatch.setattr(my_students, "_BLANK_SEND_DELAY", 0)
+    student = _student(results=[_detailed_item()])
+    _patch_student_get(monkeypatch, student)
+    subs = FakeSubscriptions(student, created=False, subscribers=[1])
+    blanks = FakeBlanks()
+    message = FakeMessage()
+    callback = FakeCallback(message, user_id=1, data=f"blanks:{student.id}")
+
+    await my_students.send_blanks(callback, subs, blanks, SETTINGS)
+
+    # оба бланка скачаны и отправлены файлами; первым — заголовок-сообщение
+    assert blanks.urls == ["https://x/d?f=1", "https://x/d?f=2"]
+    assert len(message.documents) == 2
+    assert any("Бланки ответов" in a for a in message.answers)
+    assert callback.answered == [texts.BLANKS_SENDING]
+
+
+async def test_send_blanks_serves_from_disk_without_download(monkeypatch, tmp_path):
+    # path задан и файл существует → отдаём с диска, по сети НЕ ходим.
+    monkeypatch.setattr(my_students, "Message", FakeMessage)
+    monkeypatch.setattr(my_students, "_BLANK_SEND_DELAY", 0)
+    blank_file = tmp_path / "HASH" / "Сочинение__Бланк 1.pdf"
+    blank_file.parent.mkdir(parents=True)
+    blank_file.write_bytes(b"%PDF-1.4")
+    item = SimpleNamespace(
+        subject="сочинение", subject_title="Сочинение", value="Зачёт", score=None,
+        status=None, criteria=[], primary_score=None, recognition=[],
+        blanks=[_blank("Бланк 1", "https://x/d?f=1", path="HASH/Сочинение__Бланк 1.pdf")],
+    )
+    student = _student(results=[item])
+    _patch_student_get(monkeypatch, student)
+    subs = FakeSubscriptions(student, created=False, subscribers=[1])
+    blanks = FakeBlanks()
+    settings = SimpleNamespace(blanks_dir=str(tmp_path))
+    message = FakeMessage()
+    callback = FakeCallback(message, user_id=1, data=f"blanks:{student.id}")
+
+    await my_students.send_blanks(callback, subs, blanks, settings)
+
+    assert blanks.urls == []  # по сети не ходили
+    assert len(message.documents) == 1
+
+
+async def test_send_blanks_none_alerts(monkeypatch):
+    monkeypatch.setattr(my_students, "Message", FakeMessage)
+    student = _student(results=[_result_item()])  # результат без бланков
+    _patch_student_get(monkeypatch, student)
+    subs = FakeSubscriptions(student, created=False, subscribers=[1])
+    blanks = FakeBlanks()
+    message = FakeMessage()
+    callback = FakeCallback(message, user_id=1, data=f"blanks:{student.id}")
+
+    await my_students.send_blanks(callback, subs, blanks, SETTINGS)
+
+    assert message.documents == [] and blanks.urls == []
+    assert callback.answered == [texts.BLANKS_NONE]
+
+
+async def test_send_blanks_rejects_non_subscriber(monkeypatch):
+    monkeypatch.setattr(my_students, "Message", FakeMessage)
+    student = _student(results=[_detailed_item()])
+    _patch_student_get(monkeypatch, student)
+    subs = FakeSubscriptions(student, created=False, subscribers=[2, 3])
+    blanks = FakeBlanks()
+    message = FakeMessage()
+    callback = FakeCallback(message, user_id=1, data=f"blanks:{student.id}")
+
+    await my_students.send_blanks(callback, subs, blanks, SETTINGS)
+
+    assert message.documents == [] and blanks.urls == []
+    assert callback.answered == ["Ученик не найден"]
+
+
+async def test_send_blank_document_swallows_api_error():
+    """Любая ошибка API (кроме одного повтора RetryAfter) → False, без проброса."""
+    from aiogram.exceptions import TelegramAPIError
+
+    message = FakeMessage()
+
+    async def boom(document, caption=None, reply_markup=None):
+        raise TelegramAPIError(method=None, message="too big")
+
+    message.answer_document = boom
+    ok = await my_students._send_blank_document(message, object(), "подпись")
+    assert ok is False
+
+
+async def test_send_blanks_continues_after_one_failure(monkeypatch):
+    """Сбой отправки одного бланка (не RetryAfter) не обрывает остальные.
+
+    Регрессия: раньше ловился только TelegramRetryAfter, любая другая ошибка
+    answer_document пробрасывалась и роняла цикл — остальные бланки не уходили."""
+    from aiogram.exceptions import TelegramAPIError
+
+    monkeypatch.setattr(my_students, "Message", FakeMessage)
+    monkeypatch.setattr(my_students, "_BLANK_SEND_DELAY", 0)
+    student = _student(results=[_detailed_item()])  # 2 бланка
+    _patch_student_get(monkeypatch, student)
+    subs = FakeSubscriptions(student, created=False, subscribers=[1])
+    blanks = FakeBlanks()
+    message = FakeMessage()
+
+    real_answer_document = message.answer_document
+    state = {"n": 0}
+
+    async def flaky(document, caption=None, reply_markup=None):
+        state["n"] += 1
+        if state["n"] == 1:
+            raise TelegramAPIError(method=None, message="boom")
+        await real_answer_document(document, caption=caption, reply_markup=reply_markup)
+
+    message.answer_document = flaky
+    callback = FakeCallback(message, user_id=1, data=f"blanks:{student.id}")
+
+    await my_students.send_blanks(callback, subs, blanks, SETTINGS)
+
+    assert len(message.documents) == 1  # первый упал, второй всё равно дошёл
 
 
 # --- share_student ------------------------------------------------------------
