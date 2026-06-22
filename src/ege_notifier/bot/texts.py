@@ -9,7 +9,12 @@ from ege_notifier.services.diff import ChangeType, ResultChange
 
 if TYPE_CHECKING:
     from ege_notifier.providers.ege_spb_overview import PublishedSubject
-    from ege_notifier.services.ranking import RankEntry, SubjectCount
+    from ege_notifier.services.ranking import (
+        ComboRankEntry,
+        RankEntry,
+        SubjectCount,
+        SubjectSlot,
+    )
     from ege_notifier.services.results import StudentUpdate
 
 
@@ -359,7 +364,17 @@ def admin_subjects_overview(subjects: list[SubjectCount]) -> str:
     for s in subjects:
         word = _plural(s.count, "ученик", "ученика", "учеников")
         lines.append(f"• <b>{_esc(s.title)}</b> — {s.count} {word}")
-    lines += ["", "Например: <code>/top математика профильная</code>"]
+    lines += [
+        "",
+        "Например: <code>/top математика профильная</code>",
+        "",
+        "🧮 <b>Топ по сумме баллов</b> — заглавный код предметов: "
+        "<code>/top МИР</code> (Математика+Информатика+Русский). В такой топ "
+        "попадают только ученики с результатами по всем предметам набора.",
+        "Коды: Р·русский, М·математика(проф), МБ·математика(база), Ф·физика, "
+        "Х·химия, Б·биология, Г·география, О·обществознание, Л·литература, "
+        "И·информатика, ИСТ·история, ИЯ·иностранный.",
+    ]
     return "\n".join(lines)
 
 
@@ -419,6 +434,58 @@ def admin_subject_ranking(
         lines += ["", "Без числового балла:"]
         for e in other[:limit]:
             lines.append(f"• {_rank_line(e, _esc(_display(e.value, e.score)))}")
+    return "\n".join(lines)
+
+
+def _combo_title(slots: list[SubjectSlot]) -> str:
+    """Заголовок набора предметов: «Математика (профильная) + Информатика + …»."""
+    return " + ".join(_esc(s.title) for s in slots)
+
+
+def admin_combo_empty(slots: list[SubjectSlot], notes_filter: str | None = None) -> str:
+    """Ни у кого нет результатов сразу по всем предметам запрошенного набора."""
+    base = (
+        f"🤷 По набору «<b>{_combo_title(slots)}</b>» нет ни одного ученика с "
+        "результатами сразу по всем этим предметам — топ по сумме составить не из чего."
+    )
+    if notes_filter:
+        base += f"\n🔎 фильтр по заметке: «<b>{_esc(notes_filter)}</b>»"
+    return base
+
+
+def admin_combo_ranking(
+    slots: list[SubjectSlot], entries: list[ComboRankEntry], notes_filter: str | None = None
+) -> str:
+    """Топ учеников по СУММЕ баллов за набор предметов (по убыванию суммы).
+
+    Админ-инструмент: суммы и разбивка по предметам показываются открыто (без
+    спойлера). В топ входят только ученики с баллом по каждому предмету набора —
+    это отражено в сводке («с результатами по всем предметам»)."""
+    header = f"🏆 <b>Топ по сумме: {_combo_title(slots)}</b>"
+    if notes_filter:
+        header += f"\n🔎 фильтр по заметке: «<b>{_esc(notes_filter)}</b>»"
+    totals = [e.total for e in entries]
+    avg = sum(totals) / len(totals)
+    summary = (
+        f"Учеников с результатами по всем предметам: <b>{len(entries)}</b> · "
+        f"средняя сумма: <b>{avg:.1f}</b> · "
+        f"макс/мин: <b>{totals[0]}</b>/<b>{totals[-1]}</b>"
+    )
+    lines = [header, summary, ""]
+
+    limit = 100  # защитный предел на длину сообщения Telegram (4096 символов)
+    for i, e in enumerate(entries[:limit], 1):
+        breakdown = " + ".join(
+            f"{_esc(slot.code)} {score}" for slot, score in zip(slots, e.scores)
+        )
+        tail = e.passport_masked[-2:]
+        note = f" <i>{_esc(e.notes)}</i>" if e.notes else ""
+        lines.append(
+            f"{i}. <b>{_esc(e.last_name)}</b> (…{_esc(tail)}){note} — "
+            f"<b>{e.total}</b> ({breakdown})"
+        )
+    if len(entries) > limit:
+        lines.append(f"… и ещё {len(entries) - limit}")
     return "\n".join(lines)
 
 

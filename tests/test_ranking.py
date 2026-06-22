@@ -14,6 +14,9 @@ from ege_notifier.models import Student
 from ege_notifier.services.ranking import (
     available_subjects,
     average_score,
+    is_combo_query,
+    parse_subject_combo,
+    rank_by_combo,
     rank_by_subject,
 )
 
@@ -133,3 +136,133 @@ def test_available_subjects_counts_students_and_sorts_by_count():
 
 def test_available_subjects_empty_when_no_results():
     assert available_subjects([_student("Иванов", [])]) == []
+
+
+# --- комбо-топ по сумме баллов (parse / is_combo_query / rank_by_combo) --------
+
+
+def test_parse_subject_combo_splits_mir():
+    slots = parse_subject_combo("МИР")
+    assert [s.code for s in slots] == ["М", "И", "Р"]
+    # «М» по умолчанию — профильная, «И» — информатика (а не история).
+    assert [s.keys for s in slots] == [
+        ("математика профильная",),
+        ("информатика",),
+        ("русский язык",),
+    ]
+
+
+def test_parse_subject_combo_longest_match_wins():
+    # Многобуквенные коды выигрывают у одиночных: ИСТ — история, ИКТ/ИНФ — информатика.
+    assert [s.code for s in parse_subject_combo("МИСТ")] == ["М", "ИСТ"]
+    assert [s.code for s in parse_subject_combo("РИКТ")] == ["Р", "ИКТ"]
+    # «ИЯ» (иностранный) подбирает любой язык.
+    iya = parse_subject_combo("ИЯ")
+    assert iya[0].keys[0] == "английский язык" and "немецкий язык" in iya[0].keys
+
+
+def test_parse_subject_combo_case_and_spaces_insensitive():
+    assert [s.code for s in parse_subject_combo(" м и р ")] == ["М", "И", "Р"]
+
+
+def test_parse_subject_combo_returns_none_on_unknown_letter():
+    assert parse_subject_combo("МZР") is None
+    assert parse_subject_combo("") is None
+
+
+def test_is_combo_query_distinguishes_acronym_from_subject_name():
+    assert is_combo_query("МИР") is True
+    assert is_combo_query("МИФ") is True  # математика+информатика+физика
+    # Названия предметов вводят строчными — это НЕ комбо.
+    assert is_combo_query("химия") is False
+    assert is_combo_query("математика профильная") is False
+    # Одна буква (даже валидная) — не комбинация (нужно ≥2 кода).
+    assert is_combo_query("Р") is False
+    # Слово с неизвестными буквами не разбирается целиком.
+    assert is_combo_query("ФИЗИКА") is False
+
+
+def test_rank_by_combo_sums_and_sorts_descending():
+    slots = parse_subject_combo("МИР")
+    students = [
+        _student(
+            "Петров",
+            [
+                _item("Математика профильная", score=70),
+                _item("Информатика", score=80),
+                _item("Русский язык", score=75),
+            ],
+        ),  # сумма 225
+        _student(
+            "Иванов",
+            [
+                _item("Математика профильная", score=92),
+                _item("Информатика и ИКТ", score=88),  # синоним → информатика
+                _item("Русский язык", score=90),
+            ],
+        ),  # сумма 270
+    ]
+    entries = rank_by_combo(students, slots)
+    assert [e.last_name for e in entries] == ["Иванов", "Петров"]
+    assert [e.total for e in entries] == [270, 225]
+    assert entries[0].scores == [92, 88, 90]
+
+
+def test_rank_by_combo_excludes_students_missing_a_subject():
+    slots = parse_subject_combo("МИР")
+    students = [
+        _student(
+            "Полный",
+            [
+                _item("Математика профильная", score=60),
+                _item("Информатика", score=60),
+                _item("Русский язык", score=60),
+            ],
+        ),
+        # Нет информатики — в топ по сумме не попадает.
+        _student(
+            "Неполный",
+            [
+                _item("Математика профильная", score=99),
+                _item("Русский язык", score=99),
+            ],
+        ),
+        # Информатика есть, но без числа («Зачёт») — суммировать нечего, исключаем.
+        _student(
+            "Зачёт",
+            [
+                _item("Математика профильная", score=99),
+                _item("Информатика", value="Зачёт"),
+                _item("Русский язык", score=99),
+            ],
+        ),
+    ]
+    entries = rank_by_combo(students, slots)
+    assert [e.last_name for e in entries] == ["Полный"]
+
+
+def test_rank_by_combo_foreign_language_takes_best_score():
+    # «ИЯ» засчитывает любой иностранный; если сдавал несколько — берём максимум.
+    slots = parse_subject_combo("МИЯ")  # математика(проф) + иностранный
+    student = _student(
+        "Полиглот",
+        [
+            _item("Математика профильная", score=80),
+            _item("Немецкий язык", score=70),
+            _item("Английский язык", score=95),
+        ],
+    )
+    entries = rank_by_combo([student], slots)
+    assert entries[0].scores == [80, 95] and entries[0].total == 175
+
+
+def test_rank_by_combo_filters_by_notes():
+    slots = parse_subject_combo("МР")
+    make = lambda name, notes: _student(  # noqa: E731
+        name,
+        [_item("Математика профильная", score=80), _item("Русский язык", score=80)],
+        notes=notes,
+    )
+    students = [make("Иванов", "Группа А"), make("Петров", "группа б")]
+    entries = rank_by_combo(students, slots, "группа а")
+    assert [e.last_name for e in entries] == ["Иванов"]

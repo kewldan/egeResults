@@ -153,6 +153,69 @@ async def test_top_unknown_subject_reports_empty(monkeypatch):
     assert any("пока нет результатов" in a for a in message.answers)
 
 
+async def test_top_combo_builds_sum_ranking(monkeypatch):
+    full = lambda name, m, i, r: _student(  # noqa: E731
+        name,
+        [
+            _item("Математика профильная", score=m),
+            _item("Информатика", score=i),
+            _item("Русский язык", score=r),
+        ],
+    )
+    _patch_students(
+        monkeypatch,
+        [
+            full("Петров", 70, 80, 75),  # сумма 225
+            full("Иванов", 92, 88, 90),  # сумма 270
+        ],
+    )
+    message = FakeMessage(user_id=42)
+    await admin.cmd_top(message, SimpleNamespace(args="МИР"))
+
+    text = message.answers[-1]
+    assert "Топ по сумме" in text
+    assert text.index("Иванов") < text.index("Петров")  # 270 выше 225
+    assert "270" in text
+
+
+async def test_top_combo_skips_students_without_all_subjects(monkeypatch):
+    _patch_students(
+        monkeypatch,
+        [
+            _student(
+                "Полный",
+                [
+                    _item("Математика профильная", score=60),
+                    _item("Информатика", score=60),
+                    _item("Русский язык", score=60),
+                ],
+            ),
+            _student(  # нет информатики — в комбо-топ не попадает
+                "Неполный",
+                [
+                    _item("Математика профильная", score=99),
+                    _item("Русский язык", score=99),
+                ],
+            ),
+        ],
+    )
+    message = FakeMessage(user_id=42)
+    await admin.cmd_top(message, SimpleNamespace(args="МИР"))
+
+    text = message.answers[-1]
+    assert "Полный" in text and "Неполный" not in text
+
+
+async def test_top_combo_empty_when_nobody_has_all(monkeypatch):
+    _patch_students(
+        monkeypatch, [_student("Иванов", [_item("Математика профильная", score=80)])]
+    )
+    message = FakeMessage(user_id=42)
+    await admin.cmd_top(message, SimpleNamespace(args="МИР"))
+
+    assert any("сразу по всем" in a for a in message.answers)
+
+
 # --- /check -------------------------------------------------------------------
 
 
@@ -207,3 +270,35 @@ def test_admin_subject_ranking_escapes_and_summarizes():
     assert "Иван&lt;ов" in text  # фамилия экранирована
     assert "средний балл: <b>80.0</b>" in text
     assert "макс/мин: <b>90</b>/<b>70</b>" in text
+
+
+def test_admin_combo_ranking_shows_total_and_breakdown():
+    from ege_notifier.services.ranking import parse_subject_combo, rank_by_combo
+
+    slots = parse_subject_combo("МИР")
+    students = [
+        _student(
+            "Иван<ов",
+            [
+                _item("Математика профильная", score=92),
+                _item("Информатика", score=88),
+                _item("Русский язык", score=90),
+            ],
+        ),
+        _student(
+            "Петров",
+            [
+                _item("Математика профильная", score=60),
+                _item("Информатика", score=70),
+                _item("Русский язык", score=65),
+            ],
+        ),
+    ]
+    entries = rank_by_combo(students, slots)
+    text = texts.admin_combo_ranking(slots, entries)
+    assert "Топ по сумме" in text
+    assert "Иван&lt;ов" in text  # фамилия экранирована
+    assert "<b>270</b>" in text  # сумма Иванова
+    assert "М 92 + И 88 + Р 90" in text  # разбивка по предметам
+    assert "средняя сумма: <b>232.5</b>" in text  # (270+195)/2
+    assert "макс/мин: <b>270</b>/<b>195</b>" in text

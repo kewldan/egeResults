@@ -24,7 +24,13 @@ from ege_notifier.config import Settings
 from ege_notifier.models import Student
 from ege_notifier.scheduler import broadcast_updates
 from ege_notifier.services.notifier import Notifier
-from ege_notifier.services.ranking import available_subjects, rank_by_subject
+from ege_notifier.services.ranking import (
+    available_subjects,
+    is_combo_query,
+    parse_subject_combo,
+    rank_by_combo,
+    rank_by_subject,
+)
 from ege_notifier.services.results import ResultsService
 from ege_notifier.utils import normalize_subject
 
@@ -48,7 +54,13 @@ router.message.filter(IsAdmin())
 
 @router.message(Command("top"))
 async def cmd_top(message: Message, command: CommandObject) -> None:
-    """Топ по предмету. Без аргумента — список доступных предметов с числом учеников.
+    """Топ по предмету или по СУММЕ баллов за набор предметов.
+
+    • ``/top`` без аргумента — список доступных предметов с числом учеников.
+    • ``/top математика профильная`` — топ по одному предмету.
+    • ``/top МИР`` — топ по сумме баллов за набор предметов, заданный заглавным
+      буквенным кодом (Математика+Информатика+Русский). В такой топ попадают только
+      ученики, у которых есть результат по каждому предмету набора.
 
     Необязательный фильтр по заметке (``Student.notes``) — после ``|``:
     ``/top русский | группа А`` оставит в топе только учеников, в чьей заметке
@@ -68,6 +80,17 @@ async def cmd_top(message: Message, command: CommandObject) -> None:
     subject_arg, _, notes_arg = arg.partition("|")
     subject_arg = subject_arg.strip()
     notes_arg = notes_arg.strip()
+
+    # Комбо-топ по сумме баллов (`/top МИР`): заглавный акроним из буквенных кодов
+    # отличает набор предметов от названия одного предмета (см. is_combo_query).
+    if is_combo_query(subject_arg):
+        slots = parse_subject_combo(subject_arg)
+        combo = rank_by_combo(students, slots, notes_arg)
+        if not combo:
+            await message.answer(texts.admin_combo_empty(slots, notes_arg or None))
+            return
+        await message.answer(texts.admin_combo_ranking(slots, combo, notes_arg or None))
+        return
 
     entries = rank_by_subject(students, normalize_subject(subject_arg), notes_arg)
     if not entries:
