@@ -32,6 +32,7 @@ class FakeMessage:
         self.edits: list[str] = []
         self.photos: list[tuple] = []  # (photo, caption) отправленных answer_photo
         self.documents: list[tuple] = []  # (document, caption) отправленных answer_document
+        self.media_groups: list[list] = []  # media-группы (альбомы) answer_media_group
         self.markups: list = []  # клавиатуры последних answer/edit/photo/document
         self.from_user = (
             SimpleNamespace(id=user_id, username=None, full_name=None)
@@ -54,6 +55,9 @@ class FakeMessage:
     async def answer_document(self, document, caption=None, reply_markup=None):
         self.documents.append((document, caption))
         self.markups.append(reply_markup)
+
+    async def answer_media_group(self, media, **kwargs):
+        self.media_groups.append(list(media))
 
 
 class FakeCallback:
@@ -514,9 +518,11 @@ async def test_send_blanks_falls_back_to_download_when_no_local_file(monkeypatch
 
     await my_students.send_blanks(callback, subs, blanks, SETTINGS)
 
-    # оба бланка скачаны и отправлены файлами; первым — заголовок-сообщение
+    # оба бланка скачаны; один предмет → один альбом (media group) из 2 элементов
     assert blanks.urls == ["https://x/d?f=1", "https://x/d?f=2"]
-    assert len(message.documents) == 2
+    assert message.documents == []
+    assert len(message.media_groups) == 1
+    assert len(message.media_groups[0]) == 2
     assert any("Бланки ответов" in a for a in message.answers)
     assert callback.answered == [texts.BLANKS_SENDING]
 
@@ -591,36 +597,74 @@ async def test_send_blank_document_swallows_api_error():
     assert ok is False
 
 
+def _blanks_item(subject, subject_title, blanks):
+    return SimpleNamespace(
+        subject=subject, subject_title=subject_title, value="0", score=0,
+        status=None, criteria=[], primary_score=None, recognition=[], blanks=blanks,
+    )
+
+
+async def test_send_blanks_groups_one_message_per_subject(monkeypatch):
+    """Бланки одного предмета — одним сообщением (альбом), у разных — раздельно."""
+    monkeypatch.setattr(my_students, "Message", FakeMessage)
+    monkeypatch.setattr(my_students, "_BLANK_SEND_DELAY", 0)
+    student = _student(results=[
+        _blanks_item("русский язык", "Русский язык",
+                     [_blank("Бланк 1", "https://x/r1"), _blank("Бланк 2", "https://x/r2")]),
+        _blanks_item("математика", "Математика", [_blank("Бланк 1", "https://x/m1")]),
+    ])
+    _patch_student_get(monkeypatch, student)
+    subs = FakeSubscriptions(student, created=False, subscribers=[1])
+    blanks = FakeBlanks()
+    message = FakeMessage()
+    callback = FakeCallback(message, user_id=1, data=f"blanks:{student.id}")
+
+    await my_students.send_blanks(callback, subs, blanks, SETTINGS)
+
+    # Русский (2 листа) → один альбом из 2; Математика (1 лист) → одиночный документ.
+    assert len(message.media_groups) == 1
+    assert len(message.media_groups[0]) == 2
+    assert len(message.documents) == 1
+
+
 async def test_send_blanks_continues_after_one_failure(monkeypatch):
-    """Сбой отправки одного бланка (не RetryAfter) не обрывает остальные.
+    """Сбой отправки альбома по одному предмету (не RetryAfter) не обрывает остальные.
 
     Регрессия: раньше ловился только TelegramRetryAfter, любая другая ошибка
-    answer_document пробрасывалась и роняла цикл — остальные бланки не уходили."""
+    answer_media_group/answer_document пробрасывалась и роняла цикл — бланки
+    остальных предметов не уходили."""
     from aiogram.exceptions import TelegramAPIError
 
     monkeypatch.setattr(my_students, "Message", FakeMessage)
     monkeypatch.setattr(my_students, "_BLANK_SEND_DELAY", 0)
-    student = _student(results=[_detailed_item()])  # 2 бланка
+    student = _student(results=[
+        _blanks_item("русский язык", "Русский язык",
+                     [_blank("Бланк 1", "https://x/r1"), _blank("Бланк 2", "https://x/r2")]),
+        _blanks_item("сочинение", "Сочинение",
+                     [_blank("Бланк 1", "https://x/s1"), _blank("Бланк 2", "https://x/s2")]),
+    ])
     _patch_student_get(monkeypatch, student)
     subs = FakeSubscriptions(student, created=False, subscribers=[1])
     blanks = FakeBlanks()
     message = FakeMessage()
 
-    real_answer_document = message.answer_document
+    real_answer_media_group = message.answer_media_group
     state = {"n": 0}
 
-    async def flaky(document, caption=None, reply_markup=None):
+    async def flaky(media, **kwargs):
         state["n"] += 1
         if state["n"] == 1:
             raise TelegramAPIError(method=None, message="boom")
-        await real_answer_document(document, caption=caption, reply_markup=reply_markup)
+        await real_answer_media_group(media, **kwargs)
 
-    message.answer_document = flaky
+    message.answer_media_group = flaky
     callback = FakeCallback(message, user_id=1, data=f"blanks:{student.id}")
 
     await my_students.send_blanks(callback, subs, blanks, SETTINGS)
 
-    assert len(message.documents) == 1  # первый упал, второй всё равно дошёл
+    # первый альбом упал, второй (другого предмета) всё равно дошёл
+    assert len(message.media_groups) == 1
+    assert len(message.media_groups[0]) == 2
 
 
 # --- share_student ------------------------------------------------------------

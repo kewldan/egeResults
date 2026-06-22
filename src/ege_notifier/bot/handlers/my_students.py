@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from aiogram import F, Router
@@ -11,6 +12,7 @@ from aiogram.types import (
     CallbackQuery,
     FSInputFile,
     InputFile,
+    InputMediaDocument,
     Message,
 )
 from aiogram.utils.deep_linking import create_start_link
@@ -41,7 +43,9 @@ from ege_notifier.services.subscriptions import SubscriptionService
 
 # Не шлём за раз бесконечно много файлов в один чат (анти-флуд + здравый смысл).
 _MAX_BLANKS = 20
-# Небольшая пауза между файлами, чтобы не упереться в лимит Telegram (~1 msg/с в чат).
+# Telegram-альбом (media group) — максимум 10 элементов в одном сообщении.
+_ALBUM_LIMIT = 10
+# Небольшая пауза между сообщениями, чтобы не упереться в лимит Telegram (~1 msg/с в чат).
 _BLANK_SEND_DELAY = 0.3
 
 logger = logging.getLogger(__name__)
@@ -182,25 +186,76 @@ async def _blank_file(
     return BufferedInputFile(content, filename=blank_filename(blank.title, content_type))
 
 
-async def _send_blank_document(message: Message, file: InputFile, caption: str) -> bool:
-    """Шлёт один файл-бланк; ``True`` — ушёл. Сбой доставки одного файла не должен
-    прерывать отправку остальных: один повтор после ``TelegramRetryAfter``, а любую
-    другую ошибку API (битый/большой файл, бот заблокирован) или повторный флуд-контроль
-    глотаем и → ``False`` (иначе исключение оборвало бы цикл и часть бланков пропала бы)."""
+async def _send_with_retry(send: Callable[[], Awaitable[object]], label: str) -> bool:
+    """Шлёт бланк(и) одним вызовом API; ``True`` — ушло. Сбой доставки по одному
+    предмету не должен прерывать отправку остальных: один повтор после
+    ``TelegramRetryAfter``, а любую другую ошибку API (битый/большой файл, бот
+    заблокирован) или повторный флуд-контроль глотаем и → ``False`` (иначе исключение
+    оборвало бы цикл и часть бланков пропала бы)."""
     for attempt in range(2):
         try:
-            await message.answer_document(file, caption=caption)
+            await send()
             return True
         except TelegramRetryAfter as exc:
             if attempt == 0:
                 await asyncio.sleep(exc.retry_after)
                 continue
-            logger.info("Бланк не отправлен (повторный flood-control): %s", caption)
+            logger.info("Бланк не отправлен (повторный flood-control): %s", label)
             return False
         except TelegramAPIError as exc:
-            logger.info("Бланк не отправлен (%s): %s", caption, exc)
+            logger.info("Бланк не отправлен (%s): %s", label, exc)
             return False
     return False
+
+
+async def _send_blank_document(message: Message, file: InputFile, caption: str) -> bool:
+    """Один файл-бланк отдельным сообщением (предмет с единственным листом)."""
+    return await _send_with_retry(
+        lambda: message.answer_document(file, caption=caption), caption
+    )
+
+
+async def _send_blank_group(message: Message, media: list[InputMediaDocument]) -> bool:
+    """Несколько бланков одного предмета — одним сообщением-альбомом (media group)."""
+    return await _send_with_retry(
+        lambda: message.answer_media_group(media), "альбом бланков"
+    )
+
+
+def _chunked(items: list, size: int):
+    """Бьёт список на куски ≤ ``size`` (для лимита альбома Telegram)."""
+    for start in range(0, len(items), size):
+        yield items[start : start + size]
+
+
+async def _send_subject_blanks(
+    message: Message, subject_title: str, files: list[tuple[InputFile, str]]
+) -> int:
+    """Шлёт бланки ОДНОГО предмета одним сообщением (альбом; 1 файл — документом).
+
+    Возвращает число дошедших файлов. Альбом Telegram ограничен 10 элементами,
+    поэтому редкий случай >10 листов бьём на несколько сообщений. Между сообщениями —
+    пауза (анти-флуд). Подпись каждого файла — «предмет — лист» (как раньше), чтобы он
+    оставался самодостаточным при пересылке."""
+    sent = 0
+    for chunk in _chunked(files, _ALBUM_LIMIT):
+        if len(chunk) == 1:
+            file, title = chunk[0]
+            if await _send_blank_document(
+                message, file, texts.blank_caption(subject_title, title)
+            ):
+                sent += 1
+        else:
+            media = [
+                InputMediaDocument(
+                    media=file, caption=texts.blank_caption(subject_title, title)
+                )
+                for file, title in chunk
+            ]
+            if await _send_blank_group(message, media):
+                sent += len(chunk)
+        await asyncio.sleep(_BLANK_SEND_DELAY)
+    return sent
 
 
 @router.callback_query(F.data.startswith("blanks:"))
@@ -210,45 +265,64 @@ async def send_blanks(
     blanks: BlankDownloader | None,
     settings: Settings,
 ) -> None:
-    """Шлёт сканы бланков ответов файлами в чат (с диска, скачанного при проверке).
+    """Шлёт сканы бланков ответов в чат (с диска, скачанного при проверке).
 
-    Бланки — новый контент, поэтому уходят отдельными сообщениями (не правкой
-    карточки). Спиннер на кнопке держим до первого ответа; недоступный файл
-    пропускаем, чтобы остальные дошли. Заголовок шлём лениво — только когда есть
-    реальный файл, иначе при полном провале вышло бы «заголовок + не удалось»."""
+    Бланки одного предмета уходят ОДНИМ сообщением-альбомом (media group), у разных
+    предметов — разными сообщениями. Бланки — новый контент, поэтому это новые
+    сообщения (не правка карточки). Спиннер на кнопке держим до первого ответа;
+    недоступный файл пропускаем, чтобы остальные дошли. Заголовок шлём лениво —
+    только когда есть реальный файл, иначе при полном провале вышло бы «заголовок +
+    не удалось»."""
     student = await _authorized_student(callback, subscriptions)
     if student is None:
         return
-    items = [
-        (r.subject_title or r.subject, b) for r in student.results for b in r.blanks
-    ]
-    if not items:
+    # Группируем бланки по предмету, сохраняя порядок предметов (как в results).
+    groups: list[tuple[str, list]] = []
+    position: dict[str, int] = {}
+    total = 0
+    for r in student.results:
+        for blank in r.blanks:
+            subject_title = r.subject_title or r.subject
+            if subject_title not in position:
+                position[subject_title] = len(groups)
+                groups.append((subject_title, []))
+            groups[position[subject_title]][1].append(blank)
+            total += 1
+    if total == 0:
         await callback.answer(texts.BLANKS_NONE, show_alert=True)
         return
     if not isinstance(callback.message, Message):
         await callback.answer()
         return
-    if len(items) > _MAX_BLANKS:
+    if total > _MAX_BLANKS:
         logger.info(
             "У ученика id=%s бланков больше лимита (%d > %d) — шлём первые %d",
-            student.id, len(items), _MAX_BLANKS, _MAX_BLANKS,
+            student.id, total, _MAX_BLANKS, _MAX_BLANKS,
         )
 
     await callback.answer(texts.BLANKS_SENDING)
 
     sent = 0
     header_sent = False
-    for subject_title, blank in items[:_MAX_BLANKS]:
-        file = await _blank_file(blank, blanks, settings.blanks_dir)
-        if file is None:
+    budget = _MAX_BLANKS  # общий потолок файлов на одну отправку
+    for subject_title, subject_blanks in groups:
+        if budget <= 0:
+            break
+        files: list[tuple[InputFile, str]] = []
+        for blank in subject_blanks:
+            if budget <= 0:
+                break
+            file = await _blank_file(blank, blanks, settings.blanks_dir)
+            if file is None:
+                continue
+            files.append((file, blank.title))
+            budget -= 1
+        if not files:
             continue
         if not header_sent:  # заголовок — только когда есть что показать
             await callback.message.answer(texts.blanks_header(student))
             header_sent = True
-        caption = texts.blank_caption(subject_title, blank.title)
-        if await _send_blank_document(callback.message, file, caption):
-            sent += 1
-        await asyncio.sleep(_BLANK_SEND_DELAY)
+        sent += await _send_subject_blanks(callback.message, subject_title, files)
 
     if sent == 0:
         await callback.message.answer(texts.BLANKS_FAILED)
