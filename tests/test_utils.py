@@ -24,6 +24,7 @@ def test_punctuation_and_case_variants_merge():
 def test_synonyms_collapse_to_one_subject():
     # Разные формулировки одного предмета → один ключ.
     assert normalize_subject("Информатика и ИКТ") == normalize_subject("Информатика")
+    assert normalize_subject("Информатика (КЕГЭ)") == normalize_subject("Информатика")
     assert normalize_subject("Математика профильный уровень") == normalize_subject(
         "Математика (профильная)"
     )
