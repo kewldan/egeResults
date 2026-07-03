@@ -26,6 +26,20 @@ class ResultChange:
     new_status: str | None
 
 
+def _result_key(subject: str, exam_date: str | None) -> tuple[str, str | None]:
+    """Ключ сопоставления результата между проверками: (нормализованный предмет, дата).
+
+    Предмет нормализуется (``normalize_subject``), поэтому смена формулировки на
+    сайте или правил нормализации не рвёт связь со старым снимком. Дата экзамена
+    входит в ключ, чтобы различать НЕСКОЛЬКО действующих результатов по ОДНОМУ
+    предмету: ученик может сдавать предмет в разные волны (основная + резервный
+    день), и сайт показывает оба как «Действующий результат» с разными датами. Без
+    даты в ключе они схлопывались бы в один ключ, и diff бесконечно считал бы их
+    взаимной заменой — ложное «изменение» на КАЖДОЙ проверке (спам уведомлениями).
+    """
+    return normalize_subject(subject), exam_date
+
+
 def _is_changed(old: ResultItem, fetched: FetchedResult) -> bool:
     """Считается ли результат изменившимся (→ уведомление).
 
@@ -82,13 +96,14 @@ def diff_results(
     """Чистая функция: сравнивает известные результаты с полученными от источника
     и возвращает список изменений (новые предметы и обновлённые значения/статусы).
 
-    Сопоставление идёт по нормализованному ключу предмета (на обеих сторонах),
-    поэтому смена формулировки на сайте или изменение правил нормализации не
-    рвут связь со старым снимком (без ложных «новых результатов»)."""
-    by_subject = {normalize_subject(item.subject): item for item in existing}
+    Сопоставление идёт по ключу (нормализованный предмет, дата экзамена) на обеих
+    сторонах (см. ``_result_key``), поэтому смена формулировки на сайте или изменение
+    правил нормализации не рвут связь со старым снимком (без ложных «новых
+    результатов»), а два результата по одному предмету из разных волн не путаются."""
+    by_key = {_result_key(item.subject, item.exam_date): item for item in existing}
     changes: list[ResultChange] = []
     for f in fetched:
-        old = by_subject.get(normalize_subject(f.subject))
+        old = by_key.get(_result_key(f.subject, f.exam_date))
         if old is None:
             changes.append(
                 ResultChange(
@@ -127,22 +142,25 @@ def merge_results(
     добавляет новые и сохраняет ранее известные, которых нет в текущем ответе.
     ``first_seen_at`` сохраняется, ``updated_at`` обновляется при изменении.
 
-    Сопоставление и ключ хранения — нормализованные (см. ``diff_results``):
-    предметы, сохранённые под старым ключом, лениво переезжают на канонический,
-    поэтому смена правил нормализации не плодит дубли."""
-    by_subject = {normalize_subject(item.subject): item for item in existing}
+    Сопоставление идёт по ключу (нормализованный предмет, дата экзамена), см.
+    ``diff_results``/``_result_key``; ключ хранения (``subject``) — нормализованный
+    предмет. Предметы, сохранённые под старым ключом, лениво переезжают на
+    канонический, поэтому смена правил нормализации не плодит дубли; два результата по
+    одному предмету из разных волн сохраняются как отдельные записи."""
+    by_key = {_result_key(item.subject, item.exam_date): item for item in existing}
     now = utcnow()
     merged: list[ResultItem] = []
-    seen: set[str] = set()
+    seen: set[tuple[str, str | None]] = set()
 
     for f in fetched:
-        key = normalize_subject(f.subject)
+        subject_key = normalize_subject(f.subject)
+        key = _result_key(f.subject, f.exam_date)
         seen.add(key)
-        old = by_subject.get(key)
+        old = by_key.get(key)
         if old is None:
             merged.append(
                 ResultItem(
-                    subject=key,
+                    subject=subject_key,
                     subject_title=f.subject_title,
                     score=f.score,
                     value=f.value,
@@ -158,7 +176,7 @@ def merge_results(
             changed = _is_changed(old, f)
             merged.append(
                 ResultItem(
-                    subject=key,
+                    subject=subject_key,
                     subject_title=f.subject_title or old.subject_title,
                     score=f.score if f.score is not None else old.score,
                     value=f.value if f.value is not None else old.value,
@@ -173,8 +191,8 @@ def merge_results(
                 )
             )
 
-    # Сохраняем ранее известные предметы, которых не было в этом ответе.
+    # Сохраняем ранее известные результаты, которых не было в этом ответе.
     for item in existing:
-        if normalize_subject(item.subject) not in seen:
+        if _result_key(item.subject, item.exam_date) not in seen:
             merged.append(item)
     return merged

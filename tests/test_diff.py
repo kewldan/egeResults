@@ -74,6 +74,50 @@ def test_diff_matches_old_key_after_normalization_change():
     assert diff_results(existing, fetched) == []
 
 
+def test_two_results_same_subject_different_waves_are_stable():
+    """Два действующих результата по одному предмету из разных волн (основная +
+    резервный день) НЕ считаются изменением друг друга.
+
+    Регрессия на спам уведомлениями: раньше сопоставление шло по одному лишь
+    нормализованному предмету, поэтому оба результата по «Математике профильной»
+    делили ключ, побеждал последний, и на каждой проверке первый выглядел «сменой
+    балла» (27→11) — админам летела сводка каждый цикл. Ключ теперь включает дату."""
+    existing = [
+        ResultItem(subject="математика профильная", score=11, exam_date="8 июня 2026"),
+        ResultItem(subject="математика профильная", score=27, exam_date="24 июня 2026"),
+    ]
+    fetched = [
+        FetchedResult(subject="математика профильная", score=11, exam_date="8 июня 2026"),
+        FetchedResult(subject="математика профильная", score=27, exam_date="24 июня 2026"),
+    ]
+    assert diff_results(existing, fetched) == []
+
+    merged = merge_results(existing, fetched)
+    assert len(merged) == 2  # оба результата сохранены, не схлопнуты
+    assert {(m.score, m.exam_date) for m in merged} == {
+        (11, "8 июня 2026"),
+        (27, "24 июня 2026"),
+    }
+    # updated_at не двигается — нет ложного «нового результата».
+    assert {m.updated_at for m in merged} == {e.updated_at for e in existing}
+
+
+def test_new_wave_result_for_existing_subject_is_new_not_update():
+    """Появление второго результата по уже известному предмету (новая волна) —
+    это НОВЫЙ результат по своей дате, а не «обновление» прежнего балла."""
+    existing = [
+        ResultItem(subject="математика профильная", score=11, exam_date="8 июня 2026"),
+    ]
+    fetched = [
+        FetchedResult(subject="математика профильная", score=11, exam_date="8 июня 2026"),
+        FetchedResult(subject="математика профильная", score=27, exam_date="24 июня 2026"),
+    ]
+    changes = diff_results(existing, fetched)
+    assert len(changes) == 1
+    assert changes[0].type == ChangeType.NEW
+    assert (changes[0].new_score, changes[0].old_score) == (27, None)
+
+
 def test_detail_only_change_is_not_a_change():
     """Появление детализации (критерии/баллы/распознавание/бланки) при том же
     value/score/status НЕ считается изменением — иначе после обновления парсера всем
