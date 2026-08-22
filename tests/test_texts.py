@@ -139,3 +139,9 @@ def test_format_results_update_new_and_updated():
     # Баллы спрятаны под спойлер, поэтому «70 → 82» не идёт подряд.
     assert "✏️" in text and "Математика" in text
     assert "<tg-spoiler>70</tg-spoiler> → <tg-spoiler>82</tg-spoiler>" in text
+
+
+def test_with_archive_notice_appends_only_when_enabled():
+    assert texts.with_archive_notice("x", False) == "x"
+    out = texts.with_archive_notice("x", True)
+    assert out.startswith("x\n\n") and texts.ARCHIVE_NOTICE in out

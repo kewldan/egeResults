@@ -70,6 +70,20 @@ async def test_notify_admin_sends_to_all_admins():
     assert bot.sent == [(777, "ping"), (888, "ping")]
 
 
+async def test_muted_notifier_drops_broadcast_and_admin_but_keeps_send():
+    """Архивный режим: веер и служебные уведомления глушатся, прямой ответ — нет."""
+    bot = FakeBot()
+    notifier = Notifier(
+        cast(Bot, bot), broadcast_delay=0, admin_ids=[777], muted=True
+    )
+    assert notifier.muted is True
+    assert await notifier.broadcast([1, 2, 3], "hi") == 0
+    assert await notifier.notify_admin("ping") is False
+    assert bot.sent == []
+    assert await notifier.send(5, "snapshot") is True
+    assert bot.sent == [(5, "snapshot")]
+
+
 async def test_notify_admin_noop_without_admin_id():
     bot = FakeBot()
     notifier = Notifier(cast(Bot, bot), broadcast_delay=0)

@@ -115,6 +115,10 @@ async def cmd_check(
 ) -> None:
     """Запускает проверку всех учеников в фоне и шлёт админу сводку по завершении."""
     global _check_running
+    if settings.archive_mode:
+        # Архивный режим: на сайт не ходим даже по команде админа.
+        await message.answer(texts.ADMIN_CHECK_ARCHIVED)
+        return
     if _check_running:
         await message.answer(texts.ADMIN_CHECK_ALREADY_RUNNING)
         return

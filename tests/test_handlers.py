@@ -112,7 +112,10 @@ SETTINGS = SimpleNamespace(
     card_renderer_enabled=True,
     exam_label="ЕГЭ · 2026",
     blanks_dir="data/blanks",  # для send_blanks; в тестах файлов там нет → fallback
+    archive_mode=False,
 )
+# Архивный режим: те же настройки, но бот не ходит на сайт и ничего не рассылает.
+ARCHIVE_SETTINGS = SimpleNamespace(**{**vars(SETTINGS), "archive_mode": True})
 
 
 class FakeCardRenderer:
@@ -152,6 +155,10 @@ class FakeSubscriptions:
     async def list_subscriptions(self, telegram_id):
         return list(self._students)
 
+    async def upsert_user(self, telegram_id, username, full_name):
+        # Для cmd_start: пользователь уже известен (created=False) — без админ-уведомления.
+        return SimpleNamespace(telegram_id=telegram_id), False
+
     async def create_share_token(self, student_id, telegram_id):
         # Подписчик получает токен; не-подписчик — None (как в реальном сервисе).
         if telegram_id not in self._subscribers:
@@ -179,6 +186,13 @@ class FakeResultsThrottled:
 
     async def check_student(self, student, *, manual=False):
         raise RefreshThrottled(retry_after=120)
+
+
+class FakeResultsForbidden:
+    """check_student не должен вызываться вовсе (архивный режим) — иначе тест падает."""
+
+    async def check_student(self, student, *, manual=False):
+        raise AssertionError("в архивном режиме на сайт ходить нельзя")
 
 
 def _student(results=None, registrations=None):
@@ -424,6 +438,100 @@ async def test_check_now_throttled_tells_user_to_wait(monkeypatch):
     assert notifier.admin == []
 
 
+# --- архивный режим -----------------------------------------------------------
+
+
+async def test_check_now_archive_mode_alerts_without_fetching(monkeypatch):
+    monkeypatch.setattr(my_students, "Message", FakeMessage)
+    student = _student()
+    _patch_student_get(monkeypatch, student)
+    subs = FakeSubscriptions(student, created=False, subscribers=[1, 2, 3])
+    notifier = FakeNotifier()
+    message = FakeMessage()
+    callback = FakeCallback(message, user_id=1, data=f"check:{student.id}")
+
+    await my_students.check_now(
+        callback, subs, FakeResultsForbidden(), notifier, ARCHIVE_SETTINGS
+    )
+
+    # На сайт не ходим, никого не оповещаем — только алерт про архив.
+    assert callback.answered == [texts.ARCHIVE_NO_REFRESH]
+    assert message.edits == []
+    assert notifier.broadcasts == []
+    assert notifier.admin == []
+
+
+async def test_open_card_archive_mode_hides_refresh_button(monkeypatch):
+    monkeypatch.setattr(my_students, "Message", FakeMessage)
+    student = _student(results=[_result_item()])
+    _patch_student_get(monkeypatch, student)
+    subs = FakeSubscriptions(student, created=False, subscribers=[1])
+    message = FakeMessage()
+    callback = FakeCallback(message, user_id=1, data=f"student:{student.id}")
+
+    await my_students.open_card(callback, subs, ARCHIVE_SETTINGS)
+
+    assert len(message.edits) == 1
+    markup = message.markups[-1]
+    cbs = [b.callback_data for row in markup.inline_keyboard for b in row]
+    assert not any(c.startswith("check:") for c in cbs)
+    assert f"share:{student.id}" in cbs  # остальные действия на месте
+
+
+async def test_confirm_add_archive_mode_skips_check(monkeypatch):
+    monkeypatch.setattr(add_student, "Message", FakeMessage)
+    student = _student(results=[_result_item()])  # сохранённые баллы есть
+    subs = FakeSubscriptions(student, created=True, subscribers=[7])
+    notifier = FakeNotifier()
+    message = FakeMessage()
+    callback = FakeCallback(message, user_id=7)
+    state = FakeState(
+        {"last_name": "Иванов", "passport_series": "4022", "passport_number": "083074"}
+    )
+
+    await add_student.confirm_add(
+        callback, state, subs, FakeResultsForbidden(), notifier, ARCHIVE_SETTINGS
+    )
+
+    # Снимок сохранённых баллов новому подписчику ушёл; сайт не дёргали.
+    assert [tid for tid, _ in notifier.sent] == [7]
+    assert notifier.broadcasts == []
+    assert message.answers == []  # без «данных нет» — данные есть
+
+
+async def test_confirm_add_archive_mode_warns_when_no_saved_results(monkeypatch):
+    monkeypatch.setattr(add_student, "Message", FakeMessage)
+    student = _student(results=[])
+    subs = FakeSubscriptions(student, created=True, subscribers=[7])
+    notifier = FakeNotifier()
+    message = FakeMessage()
+    callback = FakeCallback(message, user_id=7)
+    state = FakeState(
+        {"last_name": "Иванов", "passport_series": "4022", "passport_number": "083074"}
+    )
+
+    await add_student.confirm_add(
+        callback, state, subs, FakeResultsForbidden(), notifier, ARCHIVE_SETTINGS
+    )
+
+    assert any("Архивный режим" in a for a in message.answers)
+    assert notifier.sent == []
+    assert notifier.broadcasts == []
+
+
+async def test_cmd_start_archive_mode_mentions_archive():
+    message = FakeMessage(user_id=5)
+    subs = FakeSubscriptions(_student(), created=False, subscribers=[])
+    notifier = FakeNotifier()
+
+    await common.cmd_start(message, FakeState({}), subs, notifier, ARCHIVE_SETTINGS)
+    assert any(texts.ARCHIVE_NOTICE in a for a in message.answers)
+
+    message2 = FakeMessage(user_id=5)
+    await common.cmd_start(message2, FakeState({}), subs, notifier, SETTINGS)
+    assert not any(texts.ARCHIVE_NOTICE in a for a in message2.answers)
+
+
 # --- расписание / детали / бланки --------------------------------------------
 
 
@@ -543,7 +651,7 @@ async def test_send_blanks_serves_from_disk_without_download(monkeypatch, tmp_pa
     _patch_student_get(monkeypatch, student)
     subs = FakeSubscriptions(student, created=False, subscribers=[1])
     blanks = FakeBlanks()
-    settings = SimpleNamespace(blanks_dir=str(tmp_path))
+    settings = SimpleNamespace(blanks_dir=str(tmp_path), archive_mode=False)
     message = FakeMessage()
     callback = FakeCallback(message, user_id=1, data=f"blanks:{student.id}")
 
@@ -551,6 +659,24 @@ async def test_send_blanks_serves_from_disk_without_download(monkeypatch, tmp_pa
 
     assert blanks.urls == []  # по сети не ходили
     assert len(message.documents) == 1
+
+
+async def test_send_blanks_archive_mode_does_not_download(monkeypatch):
+    # Архивный режим: файла на диске нет → «на лету» НЕ качаем (на сайт не ходим).
+    monkeypatch.setattr(my_students, "Message", FakeMessage)
+    monkeypatch.setattr(my_students, "_BLANK_SEND_DELAY", 0)
+    student = _student(results=[_detailed_item()])
+    _patch_student_get(monkeypatch, student)
+    subs = FakeSubscriptions(student, created=False, subscribers=[1])
+    blanks = FakeBlanks()
+    message = FakeMessage()
+    callback = FakeCallback(message, user_id=1, data=f"blanks:{student.id}")
+
+    await my_students.send_blanks(callback, subs, blanks, ARCHIVE_SETTINGS)
+
+    assert blanks.urls == []
+    assert message.documents == [] and message.media_groups == []
+    assert any("не удалось" in a.lower() for a in message.answers)
 
 
 async def test_send_blanks_none_alerts(monkeypatch):
@@ -829,5 +955,10 @@ async def test_btn_security_and_about_send_texts():
     assert any("Безопасность" in a for a in sec.answers)
 
     about = FakeMessage(user_id=1)
-    await common.btn_about(about)
+    await common.btn_about(about, SETTINGS)
     assert any("@kewldan" in a for a in about.answers)
+    assert not any(texts.ARCHIVE_NOTICE in a for a in about.answers)
+
+    about_archive = FakeMessage(user_id=1)
+    await common.btn_about(about_archive, ARCHIVE_SETTINGS)
+    assert any(texts.ARCHIVE_NOTICE in a for a in about_archive.answers)

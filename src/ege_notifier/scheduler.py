@@ -113,6 +113,10 @@ def build_scheduler(
     monitor: MonitorService | None = None,
 ) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(timezone=settings.timezone)
+    if settings.archive_mode:
+        # Архивный режим: ни плановых проверок, ни монитора — пустой планировщик.
+        logger.info("Архивный режим: плановые проверки и монитор страницы не ставим")
+        return scheduler
     if settings.check_cron:
         trigger = CronTrigger.from_crontab(
             settings.check_cron, timezone=settings.timezone

@@ -56,7 +56,9 @@ class FakeResults:
 SETTINGS = SimpleNamespace(
     admin_ids=[42],
     results_site_url="https://www.ege.spb.ru/result/index.php?mode=ege2026&wave=1",
+    archive_mode=False,
 )
+ARCHIVE_SETTINGS = SimpleNamespace(**{**vars(SETTINGS), "archive_mode": True})
 
 
 def _item(subject, *, title=None, score=None, value=None):
@@ -248,6 +250,19 @@ async def test_check_rejects_when_already_running(monkeypatch):
 
     assert any("уже идёт" in a for a in message.answers)
     assert captured == []  # повторный запуск не ставит задачу
+
+
+async def test_check_rejected_in_archive_mode(monkeypatch):
+    captured = []
+    monkeypatch.setattr(admin, "_spawn", lambda coro: captured.append(coro))
+    monkeypatch.setattr(admin, "_check_running", False, raising=False)
+
+    message = FakeMessage(user_id=42)
+    await admin.cmd_check(message, FakeResults([]), FakeNotifier(), ARCHIVE_SETTINGS)
+
+    assert message.answers == [texts.ADMIN_CHECK_ARCHIVED]
+    assert captured == []  # на сайт не ходим
+    assert admin._check_running is False
 
 
 # --- форматирование -----------------------------------------------------------

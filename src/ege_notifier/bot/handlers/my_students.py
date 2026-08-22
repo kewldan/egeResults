@@ -65,6 +65,16 @@ def _can_card(settings: Settings, student: Student) -> bool:
     return settings.card_renderer_enabled and bool(student.results)
 
 
+def _card_keyboard(settings: Settings, student: Student):
+    """Клавиатура карточки с учётом настроек: картинка — если есть рендерер и баллы,
+    «🔄 Обновить» — только вне архивного режима (на сайт бот тогда не ходит)."""
+    return student_card_keyboard(
+        student,
+        with_card=_can_card(settings, student),
+        with_refresh=not settings.archive_mode,
+    )
+
+
 async def _show_list(
     message: Message, subscriptions: SubscriptionService, telegram_id: int
 ) -> None:
@@ -106,7 +116,7 @@ async def open_card(
         await edit_message(
             callback.message,
             texts.format_current_results(student),
-            student_card_keyboard(student, with_card=_can_card(settings, student)),
+            _card_keyboard(settings, student),
         )
 
 
@@ -302,6 +312,8 @@ async def send_blanks(
 
     await callback.answer(texts.BLANKS_SENDING)
 
+    # Архивный режим: на сайт не ходим — отдаём только то, что уже лежит на диске.
+    downloader = None if settings.archive_mode else blanks
     sent = 0
     header_sent = False
     budget = _MAX_BLANKS  # общий потолок файлов на одну отправку
@@ -312,7 +324,7 @@ async def send_blanks(
         for blank in subject_blanks:
             if budget <= 0:
                 break
-            file = await _blank_file(blank, blanks, settings.blanks_dir)
+            file = await _blank_file(blank, downloader, settings.blanks_dir)
             if file is None:
                 continue
             files.append((file, blank.title))
@@ -379,6 +391,11 @@ async def check_now(
     notifier: Notifier,
     settings: Settings,
 ) -> None:
+    if settings.archive_mode:
+        # Архивный режим: на сайт не ходим. Кнопки в карточке и так нет — это на
+        # случай старых сообщений с ещё живой кнопкой.
+        await callback.answer(texts.ARCHIVE_NO_REFRESH, show_alert=True)
+        return
     student_id = _parse_id(callback.data or "")
     if student_id is None:
         await callback.answer("Некорректный идентификатор", show_alert=True)
@@ -401,7 +418,7 @@ async def check_now(
     if not isinstance(callback.message, Message):
         return
 
-    card = student_card_keyboard(student, with_card=_can_card(settings, student))
+    card = _card_keyboard(settings, student)
     try:
         changes = await results.check_student(student, manual=True)
     except StudentNotFoundError:

@@ -56,16 +56,21 @@ async def main() -> None:
     provider = build_provider(settings)
     subscriptions = SubscriptionService(settings, cipher)
     bot = build_bot(settings.bot_token)
-    notifier = Notifier(bot, settings.broadcast_delay, settings.admin_ids)
+    # В архивном режиме Notifier глушит рассылки и служебные уведомления админам
+    # (прямые ответы на действия пользователя — send — продолжают работать).
+    notifier = Notifier(
+        bot, settings.broadcast_delay, settings.admin_ids, muted=settings.archive_mode
+    )
     # Загрузчик сканов бланков (ege.spb.ru): при проверке кладёт файлы на диск, а
     # хендлер «📄 Бланки» раздаёт их. Клиент httpx создаётся лениво при первом качании.
     blanks = BlankDownloader(timeout=settings.request_timeout)
     results = ResultsService(settings, provider, subscriptions, blanks)
 
-    # Монитор страницы-обзора — основной триггер проверок (см. scheduler).
+    # Монитор страницы-обзора — основной триггер проверок (см. scheduler). В архивном
+    # режиме не создаём вовсе: ни одного фонового запроса к сайту быть не должно.
     overview: EgeSpbOverviewMonitor | None = None
     monitor: MonitorService | None = None
-    if settings.page_monitor_enabled:
+    if settings.page_monitor_enabled and not settings.archive_mode:
         overview = EgeSpbOverviewMonitor(
             settings.results_site_url, timeout=settings.request_timeout
         )
@@ -84,18 +89,30 @@ async def main() -> None:
     dp = build_dispatcher(
         subscriptions, results, notifier, settings, storage, cards, blanks
     )
-    scheduler = build_scheduler(settings, results, notifier, subscriptions, monitor)
-    scheduler.start()
+    # В архивном режиме планировщик не нужен (build_scheduler и так не ставит job'ы,
+    # но и пустой AsyncIOScheduler запускать незачем).
+    scheduler = None
+    if not settings.archive_mode:
+        scheduler = build_scheduler(settings, results, notifier, subscriptions, monitor)
+        scheduler.start()
     logger.info(
-        "Запущено. Источник=%s, монитор=%s, FSM=%s",
+        "Запущено. Источник=%s, монитор=%s, FSM=%s, режим=%s",
         settings.provider,
         "on" if monitor is not None else "off",
         "redis" if settings.redis_url else "memory",
+        "АРХИВ" if settings.archive_mode else "обычный",
     )
+    if settings.archive_mode:
+        logger.warning(
+            "ARCHIVE_MODE=true: фоновые проверки, монитор страницы, ручные проверки "
+            "и уведомления выключены — бот отдаёт только сохранённые результаты."
+        )
 
     # Держим ссылки на задачи: иначе их может собрать GC, а исключения — потеряться.
+    # В архивном режиме стартовых проверок нет (monitor там None, check_on_startup
+    # игнорируется).
     startup_tasks: list[asyncio.Task] = []
-    if settings.check_on_startup:
+    if settings.check_on_startup and not settings.archive_mode:
         startup_tasks.append(
             asyncio.create_task(run_check_cycle(results, notifier, settings))
         )
@@ -119,7 +136,8 @@ async def main() -> None:
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
-        scheduler.shutdown(wait=False)
+        if scheduler is not None:
+            scheduler.shutdown(wait=False)
         # Закрываем ресурсы по очереди; сбой одного closer'а не должен оборвать
         # остальные (иначе, напр., упавший overview.aclose оставил бы Mongo открытым).
         await _safe_close("FSM storage", dp.storage.close())  # пул Redis (Memory — no-op)

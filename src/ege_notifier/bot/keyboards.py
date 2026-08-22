@@ -66,17 +66,19 @@ def _has_blanks(student: Student) -> bool:
 
 
 def student_card_keyboard(
-    student: Student, *, with_card: bool = False
+    student: Student, *, with_card: bool = False, with_refresh: bool = True
 ) -> InlineKeyboardMarkup:
     """Карточка ученика: действия (проверить/поделиться/удалить) + просмотр данных.
 
     Кнопки данных показываем только когда есть что показать: 📅 «Расписание» (есть
     регистрации), 📊 «Детали» (есть критерии/первичный балл/распознанные ответы),
     📄 «Бланки» (есть сканы). ``with_card`` добавляет «🖼 Картинка для сторис» —
-    только когда рендерер включён и у ученика есть результаты."""
+    только когда рендерер включён и у ученика есть результаты. ``with_refresh=False``
+    прячет «🔄 Обновить» (архивный режим: на сайт бот больше не ходит)."""
     sid = student.id
     kb = InlineKeyboardBuilder()
-    kb.button(text="🔄 Обновить", callback_data=f"check:{sid}")
+    if with_refresh:
+        kb.button(text="🔄 Обновить", callback_data=f"check:{sid}")
     kb.button(text="🔗 Поделиться", callback_data=f"share:{sid}")
 
     info_buttons = 0
@@ -95,11 +97,13 @@ def student_card_keyboard(
     kb.button(text="🗑 Удалить", callback_data=f"del:{sid}")
     kb.button(text="⬅️ К списку", callback_data="my_students")
 
-    # Раскладка: «обновить»/«поделиться» в ряд; кнопки данных по 2 в ряд; картинка,
-    # удалить, «к списку» — каждая своей строкой.
+    # Раскладка: «обновить»/«поделиться» в ряд (без «обновить» — одна кнопка);
+    # кнопки данных по 2 в ряд; картинка, удалить, «к списку» — каждая своей строкой.
     full, rem = divmod(info_buttons, 2)
     info_rows = [2] * full + ([rem] if rem else [])
-    kb.adjust(2, *info_rows, *([1] * (3 if with_card else 2)))
+    kb.adjust(
+        2 if with_refresh else 1, *info_rows, *([1] * (3 if with_card else 2))
+    )
     return kb.as_markup()
 
 

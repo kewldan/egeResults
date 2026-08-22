@@ -25,12 +25,22 @@ class Notifier:
         bot: Bot,
         broadcast_delay: float = 0.05,
         admin_ids: Iterable[int] | None = None,
+        *,
+        muted: bool = False,
     ):
         self._bot = bot
         # Пауза между сообщениями веерной рассылки (анти-rate-limit Telegram).
         self._broadcast_delay = broadcast_delay
         # Кому слать служебные уведомления (новые результаты/пользователи); [] — выкл.
         self._admin_ids = list(admin_ids or [])
+        # Архивный режим: веерные рассылки и служебные уведомления админам глушатся
+        # (``broadcast``/``notify_admin`` — no-op). Прямой ``send`` остаётся — это
+        # ответы на действия самого пользователя (снимок баллов при подписке).
+        self._muted = muted
+
+    @property
+    def muted(self) -> bool:
+        return self._muted
 
     async def send(
         self,
@@ -60,6 +70,9 @@ class Notifier:
         text: str,
         reply_markup: InlineKeyboardMarkup | None = None,
     ) -> int:
+        if self._muted:
+            logger.debug("Рассылка заглушена (архивный режим)")
+            return 0
         sent = 0
         for i, tid in enumerate(telegram_ids):
             if i and self._broadcast_delay > 0:
@@ -76,6 +89,9 @@ class Notifier:
         Возвращает ``True``, если доставлено хотя бы одному. Админов немного и чаты
         у них разные, так что отдельный троттлинг тут не нужен (лимит ~1 сообщение/с
         — на чат)."""
+        if self._muted:
+            logger.debug("Уведомление админам заглушено (архивный режим)")
+            return False
         sent_any = False
         for admin_id in self._admin_ids:
             if await self.send(admin_id, text):

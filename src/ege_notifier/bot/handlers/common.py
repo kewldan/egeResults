@@ -69,6 +69,10 @@ async def cmd_start_shared(
     if student.results:
         await notifier.send(user.id, texts.format_current_results(student))
 
+    if settings.archive_mode:
+        # Архивный режим: свежие результаты не подтягиваем — на сайт не ходим.
+        return
+
     # Подтягиваем свежие результаты (с учётом анти-спам кулдауна на ученика).
     try:
         changes = await results.check_student(student, manual=True)
@@ -90,11 +94,15 @@ async def cmd_start(
     state: FSMContext,
     subscriptions: SubscriptionService,
     notifier: Notifier,
+    settings: Settings,
 ) -> None:
     await state.clear()
     await _register_user(message, subscriptions, notifier)
     # Одно приветственное сообщение + постоянная нижняя клавиатура.
-    await message.answer(texts.WELCOME, reply_markup=main_reply_keyboard())
+    await message.answer(
+        texts.with_archive_notice(texts.WELCOME, settings.archive_mode),
+        reply_markup=main_reply_keyboard(),
+    )
 
 
 # Нижняя кнопка «Мои ученики» — список учеников одним сообщением: кнопка на
@@ -120,13 +128,13 @@ async def btn_security(message: Message) -> None:
 
 
 @router.message(F.text == texts.BTN_ABOUT)
-async def btn_about(message: Message) -> None:
-    await message.answer(texts.ABOUT)
+async def btn_about(message: Message, settings: Settings) -> None:
+    await message.answer(texts.with_archive_notice(texts.ABOUT, settings.archive_mode))
 
 
 @router.message(Command("help"))
-async def cmd_help(message: Message) -> None:
-    await message.answer(texts.HELP)
+async def cmd_help(message: Message, settings: Settings) -> None:
+    await message.answer(texts.with_archive_notice(texts.HELP, settings.archive_mode))
 
 
 @router.message(Command("cancel"))

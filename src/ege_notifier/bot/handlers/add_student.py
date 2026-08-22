@@ -115,6 +115,16 @@ async def confirm_add(
             back_to_list_keyboard(),
         )
 
+    if settings.archive_mode:
+        # Архивный режим: на сайт не ходим. Снимок сохранённых баллов новый подписчик
+        # уже получил выше; если сохранённых результатов нет — честно скажем, что
+        # ждать их больше неоткуда.
+        if not student.results:
+            await callback.message.answer(
+                texts.ARCHIVE_NO_DATA.format(label=texts.student_label(student))
+            )
+        return
+
     # Сразу проверим текущие результаты.
     try:
         changes = await results.check_student(student, manual=True)

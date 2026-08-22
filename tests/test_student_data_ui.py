@@ -160,6 +160,22 @@ def test_card_keyboard_with_card_button():
     assert "card:abc" in cbs
 
 
+def test_card_keyboard_without_refresh_button():
+    """Архивный режим: «🔄 Обновить» прячем, остальные действия и просмотр остаются."""
+    student = _student(
+        registrations=[_reg("x", title="X")],
+        results=[_item("y", title="Y", score=70, criteria=[_crit("К1", "2")])],
+    )
+    markup = student_card_keyboard(student, with_card=True, with_refresh=False)
+    cbs = _callbacks(markup)
+    assert "check:abc" not in cbs
+    for expected in ("share:abc", "schedule:abc", "details:abc", "card:abc",
+                     "del:abc", "my_students"):
+        assert expected in cbs
+    # Первая строка — одна кнопка «поделиться» (раскладка не съехала).
+    assert [b.callback_data for b in markup.inline_keyboard[0]] == ["share:abc"]
+
+
 # --- blanks.blank_filename ----------------------------------------------------
 
 
